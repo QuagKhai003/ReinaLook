@@ -17,7 +17,12 @@ import sys
 from lutgen.engine.cube_io import write_cube
 from lutgen.fitter.mid import MidFitter
 from lutgen.fitter.rich import RichFitter
-from lutgen.orchestration.pipeline import render_cube, render_cube_from_pairs, render_look_cube
+from lutgen.orchestration.pipeline import (
+    render_cube,
+    render_cube_dual,
+    render_cube_from_pairs,
+    render_look_cube,
+)
 from lutgen.orchestration.preset import load_preset, save_preset
 
 _FITTERS = {"mid": MidFitter, "rich": RichFitter}
@@ -28,7 +33,9 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     r = sub.add_parser("render", help="render references + strength to a .cube")
-    r.add_argument("--refs", nargs="*", default=None, help="reference image paths")
+    r.add_argument("--refs", nargs="*", default=None, help="reference (graded/target) image paths")
+    r.add_argument("--source", nargs="*", default=None,
+                   help="optional NEUTRAL image pool; transports source→refs (unpaired, any counts)")
     r.add_argument("--strength", type=float, default=None, help="look strength 0..1 (default 1.0)")
     r.add_argument("--out", "-o", required=True, help="output .cube path")
     r.add_argument("--title", default=None, help="cube TITLE")
@@ -91,11 +98,17 @@ def _cmd_render(args: argparse.Namespace) -> int:
         kwargs["space"] = args.space
         kwargs["method"] = args.method
     fitter = _FITTERS[args.fitter](**kwargs)
-    cube = render_cube(refs, strength, title=title, fitter=fitter, max_dim=args.max_dim)
+    if args.source:                       # unpaired neutral→graded transport (ADR-0016)
+        cube = render_cube_dual(args.source, refs, strength, fitter=fitter, title=title,
+                                max_dim=args.max_dim)
+        note = f"{len(args.source)} source + {len(refs)} target"
+    else:
+        cube = render_cube(refs, strength, title=title, fitter=fitter, max_dim=args.max_dim)
+        note = f"{len(refs)} refs"
     write_cube(args.out, cube.samples, cube.size, title=cube.title)
     if args.save_preset:
         save_preset(args.save_preset, refs, strength, title)
-    print(f"wrote {args.out}  (replace Node 2, {args.fitter} fitter, {len(refs)} refs, strength {strength})")
+    print(f"wrote {args.out}  (replace Node 2, {args.fitter} fitter, {note}, strength {strength})")
     return 0
 
 
