@@ -1,0 +1,49 @@
+# ── Untracked: planning / workflow / project management ──────────────
+# Per project policy: git tracks CODE only. All planning, workflow, and
+# product-management artifacts stay local (untracked).
+/Plan/
+/dev-workflow-kit/
+/docs/
+/codemap/
+/LUT/
+/CLAUDE.md
+/WORKFLOW.md
+
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+tests/
+
+# ── Editors / OS ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ── Local artifacts ──────────────────────────────────────────────────
+*.cube
+!tests/**/*.cube
+# the protected base layer ships with the package — keep it tracked
+!src/lutgen/engine/data/*.cube
+scratch/
+*.log
+# generated demo artifacts at repo root (local deliverables, not source)
+/LookForge_*.png
+/*_look.json
+/proto_*.png
+
+*.png
+*.jpg

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lutgen"
+version = "0.0.0"
+description = "Generate a 33-point 3D .cube LUT: DWG/DI -> Rec.709 g2.4 + look + strength."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "colour-science>=0.4.7",
+    "pillow>=10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+gui = ["PySide6>=6.6"]
+
+[project.scripts]
+lutgen = "lutgen.cli:main"
+
+[project.gui-scripts]
+lutgen-gui = "lutgen.app.run:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"lutgen.engine" = ["data/*.cube"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
