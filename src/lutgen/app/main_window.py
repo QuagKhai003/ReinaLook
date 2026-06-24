@@ -295,30 +295,25 @@ class MainWindow(QtWidgets.QMainWindow):
             still_dirty=self._still_dirty, look=self._look_samples,
         )
 
-    # — the worker payload (runs in _ComputeThread) —
+    # — the worker payload (runs in _ComputeThread): builds the heavy LOOK only —
     def _compute(self, snap, report):
-        report(1)
-        look = self._build_look(snap, report) if snap["refit"] else snap["look"]
-        report(66)
-        final = self._base if look is None else _assemble(look, snap["strength"], snap["placement"], DEFAULT_SIZE)
-        report(70)
-        before = None
-        if snap["still_dirty"]:
-            before = apply_cube(snap["still"], self._base, progress=lambda f: report(70 + int(10 * f)))
-            after = self._apply_final(snap, final, look, report, 80, 99)
-        else:
-            after = self._apply_final(snap, final, look, report, 70, 99)
+        report(5)
+        look = self._build_look(snap, report)   # the only expensive step (stats + fit)
         report(100)
-        return look, before, after, snap["refit"]
+        return look
 
-    def _apply_final(self, snap, final, look, report, lo, hi):
-        """Apply the final cube to the preview still. For 'between' placement the cube is
-        DWG/DI→DWG/DI, so Node 2 (base) is applied after to show the Rec.709 result."""
-        if snap["placement"] == "between" and look is not None:
-            mid = (lo + hi) // 2
-            looked = apply_cube(snap["still"], final, progress=lambda f: report(lo + int((mid - lo) * f)))
-            return apply_cube(looked, self._base, progress=lambda f: report(mid + int((hi - mid) * f)))
-        return apply_cube(snap["still"], final, progress=lambda f: report(lo + int((hi - lo) * f)))
+    # — fast, synchronous preview render (still / placement / strength changes) —
+    def _apply_to_still(self, final):
+        """Apply the final cube to the (preview-sized) still. For 'between' the cube is
+        DWG/DI→DWG/DI, so apply Node 2 (base) after to show the Rec.709 result."""
+        looked = apply_cube(self._still, final)
+        if self._placement_key() == "between" and self._look_samples is not None:
+            looked = apply_cube(looked, self._base)
+        return looked
+
+    def _render_preview(self) -> None:
+        self._show(self._before_lbl, self._before_img)
+        self._show(self._after_lbl, self._apply_to_still(self._final_samples()))
 
     # — manual compute (Compute button only) —
     def _set_busy(self, on: bool) -> None:
@@ -337,15 +332,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._dirty = True
         self._compute_btn.setText("Compute preview ●")   # ● = changes pending
 
-    def _launch_compute(self, _=None, *, refit: bool = True) -> None:
-        """Compute on a worker thread. ``refit`` True (Compute button) rebuilds the look; False
-        (placement switch / still load) only re-assembles + re-applies the cached look to the still."""
+    def _launch_compute(self, _=None) -> None:
+        """Compute button: rebuild the heavy LOOK on a worker thread (spinner + gray-out)."""
         if self._thread is not None and self._thread.isRunning():
             return
-        # refit=False (still load / placement switch) always renders: applies the cached look if
-        # any, else the base — so a freshly loaded still shows immediately, even before Compute.
-        snap = self._snapshot(refit=refit)
-        self._still_dirty = False
+        snap = self._snapshot(refit=True)
         self._compute_btn.setText("Computing…")
         self._set_controls_enabled(False)         # gray everything out
         self._set_busy(True)
@@ -355,8 +346,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._thread.start()
 
     def _refresh_preview(self) -> None:
-        """Re-render the preview for a preview-only change (placement, still) — no look rebuild."""
-        self._launch_compute(refit=False)
+        """Preview-only change (placement / strength) — fast synchronous render, no look rebuild."""
+        self._render_preview()
 
     def _on_computed(self, result) -> None:
         self._set_busy(False)
@@ -365,23 +356,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self._compute_btn.setText("Compute preview ●" if self._dirty else "Compute preview")
             QtWidgets.QMessageBox.warning(self, "LookForge", f"Could not build look:\n{result}")
             return
-        look, before, after, was_refit = result
-        self._look_samples = look
-        if was_refit:
-            self._dirty = False                   # look is now current
-        self._compute_btn.setText("Compute preview ●" if self._dirty else "Compute preview")
-        if before is not None:
-            self._before_img = before
-        self._show(self._before_lbl, self._before_img)
-        self._show(self._after_lbl, after)
+        self._look_samples = result
+        self._dirty = False                       # look is now current
+        self._compute_btn.setText("Compute preview")
+        self._render_preview()                    # fast synchronous apply to the still
 
     def _show(self, lbl, img) -> None:
         lbl.setPixmap(_to_pixmap(img).scaledToWidth(
             _PREVIEW_W, QtCore.Qt.TransformationMode.SmoothTransformation))
 
-    def _update_preview(self) -> None:   # initial synchronous render (synthetic still is small)
-        self._show(self._before_lbl, self._before_img)
-        self._show(self._after_lbl, apply_cube(self._still, self._final_samples()))
+    def _update_preview(self) -> None:
+        self._render_preview()
 
     def _sync_controls(self) -> None:
         rich = self._fitter.currentText() == "Rich"
@@ -397,19 +382,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_controls(); self._mark_dirty()
 
     def _on_placement(self, _=None) -> None:
-        # placement is preview-only (cached look); refresh now unless the look itself is stale.
-        if self._look_samples is not None and not self._dirty:
-            self._refresh_preview()
-        else:
-            self._mark_dirty()
+        self._render_preview()                    # preview-only, fast (re-assemble cached look)
 
     def _on_tone(self, _=None) -> None:
         self._tone_lbl.setText(f"Tone (exposure match): {self._tone_value():.2f}")
-        self._mark_dirty()
+        self._mark_dirty()                        # tone is inside the fitter → needs Compute
 
     def _on_strength(self, _=None) -> None:
         self._strength_lbl.setText(f"Strength: {self._strength_value():.2f}")
-        self._mark_dirty()
+        self._render_preview()                    # preview-only, fast (strength is a blend)
 
     def _add(self, title, store, listw) -> None:
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, title, "", _IMG_FILTER)
@@ -441,9 +422,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _load_still(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load DWG/DI preview still", "", _IMG_FILTER)
         if path:
-            self._still = load_preview_still(path)   # full resolution (see preview.load_preview_still)
-            self._still_dirty = True                 # "before" recomputed now
-            self._refresh_preview()                  # show the loaded still immediately
+            self._still = load_preview_still(path)
+            self._before_img = apply_cube(self._still, self._base)   # base-converted still ("before")
+            self._render_preview()                   # show immediately — no look compute, no spinner
 
     def _export(self) -> None:
         if self._look_samples is None and self._has_inputs():
