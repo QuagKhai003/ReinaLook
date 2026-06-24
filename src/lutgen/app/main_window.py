@@ -24,7 +24,7 @@ from lutgen.engine.strength import blend
 from lutgen.fitter.mid import MidFitter
 from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.consensus import build_consensus
-from lutgen.orchestration.ingest import load_references
+from lutgen.orchestration.ingest import load_image
 from lutgen.orchestration.preset import save_preset
 from lutgen.orchestration.stats import compute_stats
 
@@ -45,7 +45,8 @@ def _to_pixmap(img: np.ndarray) -> QtGui.QPixmap:
 class _ComputeThread(QtCore.QThread):
     """Run the (possibly heavy) look + preview computation off the UI thread."""
 
-    done = QtCore.Signal(object)   # (look_samples | None, before_img | None, after_img) or Exception
+    done = QtCore.Signal(object)    # result tuple or Exception
+    progress = QtCore.Signal(int)   # 0..100
 
     def __init__(self, fn):
         super().__init__()
@@ -53,7 +54,7 @@ class _ComputeThread(QtCore.QThread):
 
     def run(self):
         try:
-            self.done.emit(self._fn())
+            self.done.emit(self._fn(self.progress.emit))   # fn receives a report(pct) callback
         except Exception as exc:   # report back to the UI thread
             self.done.emit(exc)
 
@@ -182,11 +183,13 @@ class MainWindow(QtWidgets.QMainWindow):
         still_btn = QtWidgets.QPushButton("Load preview still (DWG/DI frame)…")
         still_btn.clicked.connect(self._load_still)
 
-        # busy indicator: an indeterminate progress bar + label, shown while computing
+        # busy indicator: a percentage progress bar + label, shown while computing
         self._busy = QtWidgets.QProgressBar()
-        self._busy.setRange(0, 0)            # indeterminate ("spinner")
-        self._busy.setTextVisible(False)
-        self._busy.setMaximumHeight(6)
+        self._busy.setRange(0, 100)
+        self._busy.setValue(0)
+        self._busy.setTextVisible(True)
+        self._busy.setFormat("%p%")
+        self._busy.setMaximumHeight(16)
         self._busy_lbl = QtWidgets.QLabel("⏳ computing…")
         self._busy_lbl.setStyleSheet("color: #d80;")
         busy_row = QtWidgets.QHBoxLayout()
@@ -240,20 +243,32 @@ class MainWindow(QtWidgets.QMainWindow):
         return RichFitter(tone_strength=tone, space=space, method=method)
 
     # — building the look (pure; safe to run off the UI thread) —
-    def _build_look(self, snap) -> np.ndarray | None:
+    def _build_look(self, snap, report) -> np.ndarray | None:
         fitter = self._make_fitter(snap["fitter"], snap["method"], snap["space"], snap["tone"])
+
+        def _stats(paths, lo, hi):
+            stats = []
+            for i, p in enumerate(paths):
+                stats.append(compute_stats(load_image(p)))
+                report(lo + int((hi - lo) * (i + 1) / len(paths)))
+            return stats
+
         if snap["pairs"]:
             if not snap["before"] or not snap["after"]:
                 return None
-            consensus = build_consensus([compute_stats(i) for i in load_references(snap["after"])])
-            src = np.concatenate([i.reshape(-1, 3) for i in load_references(snap["before"])])
+            consensus = build_consensus(_stats(snap["after"], 5, 30))
+            src = np.concatenate([load_image(p).reshape(-1, 3) for p in snap["before"]])
             if src.shape[0] > 200_000:
                 src = src[np.random.default_rng(0).choice(src.shape[0], 200_000, replace=False)]
-            return fitter.fit(consensus, source_samples=src)(self._base)
-        if not snap["refs"]:
-            return None
-        consensus = build_consensus([compute_stats(i) for i in load_references(snap["refs"])])
-        return fitter.fit(consensus)(self._base)
+            report(40)
+            look = fitter.fit(consensus, source_samples=src)
+        else:
+            if not snap["refs"]:
+                return None
+            consensus = build_consensus(_stats(snap["refs"], 5, 40))
+            look = fitter.fit(consensus)
+        report(60)
+        return look(self._base)
 
     def _final_samples(self) -> np.ndarray:
         if self._look_samples is None:
@@ -271,15 +286,26 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     # — the worker payload (runs in _ComputeThread) —
-    def _compute(self, snap):
-        look = self._build_look(snap) if snap["refit"] else snap["look"]
+    def _compute(self, snap, report):
+        report(1)
+        look = self._build_look(snap, report) if snap["refit"] else snap["look"]
+        report(66)
         final = self._base if look is None else regularize(blend(self._base, look, snap["strength"]))
-        after = apply_cube(snap["still"], final)
-        before = apply_cube(snap["still"], self._base) if snap["still_dirty"] else None
+        report(70)
+        before = None
+        if snap["still_dirty"]:                  # split the apply budget across before+after
+            before = apply_cube(snap["still"], self._base,
+                                progress=lambda f: report(70 + int(14 * f)))
+            after = apply_cube(snap["still"], final, progress=lambda f: report(84 + int(15 * f)))
+        else:
+            after = apply_cube(snap["still"], final, progress=lambda f: report(70 + int(29 * f)))
+        report(100)
         return look, before, after, snap["refit"]
 
     # — scheduling: debounce sliders, fire discrete actions now —
     def _set_busy(self, on: bool) -> None:
+        if on:
+            self._busy.setValue(0)
         self._busy.setVisible(on); self._busy_lbl.setVisible(on)
 
     def _schedule(self, refit: bool) -> None:
@@ -298,7 +324,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pending_refit = False
         self._still_dirty = False
         self._set_busy(True)
-        self._thread = _ComputeThread(lambda: self._compute(snap))
+        self._thread = _ComputeThread(lambda report: self._compute(snap, report))
+        self._thread.progress.connect(self._busy.setValue)
         self._thread.done.connect(self._on_computed)
         self._thread.start()
 
@@ -382,7 +409,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._look_samples is None and self._has_inputs():
             try:                                    # ensure the look is current before export
                 self._set_busy(True); QtWidgets.QApplication.processEvents()
-                self._look_samples = self._build_look(self._snapshot(True))
+                self._look_samples = self._build_look(self._snapshot(True), lambda _p: None)
             except Exception as exc:
                 QtWidgets.QMessageBox.warning(self, "LookForge", f"Could not build look:\n{exc}")
             finally:

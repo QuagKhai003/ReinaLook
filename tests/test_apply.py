@@ -34,6 +34,16 @@ def test_gray_ramp_monotone():
     assert np.all(np.diff(luma) >= -1e-9)
 
 
+def test_progress_callback_matches_and_completes():
+    base = load_base()
+    img = np.random.default_rng(3).random((30, 20, 3))
+    seen = []
+    out = apply_cube(img, base, progress=seen.append, chunks=8)
+    assert out.shape == (30, 20, 3)
+    assert seen and seen[-1] == 1.0 and all(0.0 <= f <= 1.0 for f in seen)
+    np.testing.assert_allclose(out, apply_cube(img, base), atol=1e-9)  # same result as unchunked
+
+
 def test_bad_shape_raises():
     import pytest
 
