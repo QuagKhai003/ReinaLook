@@ -23,8 +23,9 @@ import numpy as np
 from .cube_io import Cube, read_cube
 
 DEFAULT_SIZE = 33
+INVERSE_SIZE = 65   # the inverse is higher-resolution (steep ill-conditioned map; ADR-0018)
 BASE_ASSET = "base_dwg_di_to_rec709_g24.cube"
-INVERSE_ASSET = "base_inverse_rec709_to_dwg_di.cube"  # Rec.709 -> DWG/DI (ADR-0009)
+INVERSE_ASSET = "base_inverse_rec709_to_dwg_di.cube"  # Rec.709 -> DWG/DI (ADR-0009/0018)
 
 
 @lru_cache(maxsize=4)
@@ -52,10 +53,11 @@ def load_base(size: int = DEFAULT_SIZE) -> np.ndarray:
     return _load_base_cube(size).samples.copy()
 
 
-def load_base_inverse(size: int = DEFAULT_SIZE) -> np.ndarray:
+def load_base_inverse(size: int = INVERSE_SIZE) -> np.ndarray:
     """Return the inverse base cube samples (Rec.709 -> DWG/DI), flat ``(size**3, 3)``.
 
-    Maps Rec.709 color back into DWG/DI — used to pull Rec.709 reference images into the working
-    space for the log-space look pipeline (ADR-0009). Precomputed asset; returns a fresh copy.
+    Maps Rec.709 color back into DWG/DI — used by the "between Node 1 & 2" placement (ADR-0017) and
+    the log-space pipeline. Higher-resolution (65-point, ADR-0018) because the inverse is steep.
+    Precomputed asset; returns a fresh copy.
     """
     return _load_asset_cube(INVERSE_ASSET, size).samples.copy()
