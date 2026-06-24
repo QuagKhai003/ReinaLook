@@ -31,9 +31,8 @@ from lutgen.orchestration.stats import compute_stats
 from .preview import load_preview_still, make_test_still
 
 _IMG_FILTER = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.exr)"
-_PREVIEW_W = 460
-_REFIT_MS = 240   # debounce before rebuilding the look (tone/fitter changes)
-_BLEND_MS = 50    # debounce before re-rendering the preview (strength changes)
+_PREVIEW_W = 520
+_DEBOUNCE_MS = 2000   # wait this long after the LAST slider/control change, then compute
 
 
 def _to_pixmap(img: np.ndarray) -> QtGui.QPixmap:
@@ -41,6 +40,22 @@ def _to_pixmap(img: np.ndarray) -> QtGui.QPixmap:
     h, w, _ = arr.shape
     qimg = QtGui.QImage(arr.data, w, h, 3 * w, QtGui.QImage.Format.Format_RGB888).copy()
     return QtGui.QPixmap.fromImage(qimg)
+
+
+class _ComputeThread(QtCore.QThread):
+    """Run the (possibly heavy) look + preview computation off the UI thread."""
+
+    done = QtCore.Signal(object)   # (look_samples | None, before_img | None, after_img) or Exception
+
+    def __init__(self, fn):
+        super().__init__()
+        self._fn = fn
+
+    def run(self):
+        try:
+            self.done.emit(self._fn())
+        except Exception as exc:   # report back to the UI thread
+            self.done.emit(exc)
 
 
 def _file_list():
@@ -56,17 +71,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("LookForge")
         self._base = load_base()
         self._still = make_test_still()
-        self._before_img = apply_cube(self._still, self._base)  # cached: never changes
+        self._before_img = apply_cube(self._still, self._base)  # cached preview "before"
         self._look_samples: np.ndarray | None = None
         self._refs: list[str] = []
         self._before: list[str] = []
         self._after: list[str] = []
 
-        # debounce timers — coalesce rapid slider ticks so we don't recompute mid-drag
-        self._refit_timer = QtCore.QTimer(self, singleShot=True, interval=_REFIT_MS)
-        self._refit_timer.timeout.connect(self._do_refit)
-        self._blend_timer = QtCore.QTimer(self, singleShot=True, interval=_BLEND_MS)
-        self._blend_timer.timeout.connect(self._update_preview)
+        # single debounce timer: restarts on every change, fires once after _DEBOUNCE_MS of quiet.
+        self._timer = QtCore.QTimer(self, singleShot=True, interval=_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._launch_compute)
+        self._pending_refit = False     # whether the next compute must rebuild the look
+        self._still_dirty = False       # whether "before" must be recomputed (new still)
+        self._thread: _ComputeThread | None = None
 
         self._build_ui()
         self._sync_controls()
@@ -130,9 +146,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._method = QtWidgets.QComboBox(); self._method.addItems(["mkl", "pdf"])
         self._space = QtWidgets.QComboBox(); self._space.addItems(["oklab", "rgb"])
         for c in (self._fitter, self._method, self._space):
-            c.currentIndexChanged.connect(self._on_look_changed)
+            c.currentIndexChanged.connect(self._on_fitter_changed)
 
-        self._tone = self._slider(100, self._on_look_changed)
+        self._tone = self._slider(100, self._on_tone)
         self._tone_lbl = QtWidgets.QLabel("Tone (exposure match): 1.00")
         self._strength = self._slider(80, self._on_strength)
         self._strength_lbl = QtWidgets.QLabel("Strength: 0.80")
@@ -165,8 +181,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self._after_lbl = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
         still_btn = QtWidgets.QPushButton("Load preview still (DWG/DI frame)…")
         still_btn.clicked.connect(self._load_still)
+
+        # busy indicator: an indeterminate progress bar + label, shown while computing
+        self._busy = QtWidgets.QProgressBar()
+        self._busy.setRange(0, 0)            # indeterminate ("spinner")
+        self._busy.setTextVisible(False)
+        self._busy.setMaximumHeight(6)
+        self._busy_lbl = QtWidgets.QLabel("⏳ computing…")
+        self._busy_lbl.setStyleSheet("color: #d80;")
+        busy_row = QtWidgets.QHBoxLayout()
+        busy_row.addWidget(self._busy_lbl)
+        busy_row.addWidget(self._busy, 1)
+        self._set_busy(False)
+
         preview = QtWidgets.QVBoxLayout()
         preview.addWidget(still_btn)
+        preview.addLayout(busy_row)
         preview.addWidget(QtWidgets.QLabel("Before (your original / base)"))
         preview.addWidget(self._before_lbl, 1)
         preview.addWidget(QtWidgets.QLabel("After (final look)"))
@@ -201,46 +231,99 @@ class MainWindow(QtWidgets.QMainWindow):
         return RichFitter(tone_strength=tone, space=self._space.currentText(),
                           method=self._method.currentText())
 
-    def _refit(self) -> None:
-        try:
-            if self._is_pairs():           # unpaired Neutral + Graded pools (ADR-0016)
-                if not self._before or not self._after:
-                    self._look_samples = None
-                    return
-                targets = load_references(self._after)
-                consensus = build_consensus([compute_stats(i) for i in targets])
-                src = np.concatenate([i.reshape(-1, 3) for i in load_references(self._before)])
-                if src.shape[0] > 200_000:
-                    src = src[np.random.default_rng(0).choice(src.shape[0], 200_000, replace=False)]
-                look = self._build_fitter().fit(consensus, source_samples=src)
-            else:
-                if not self._refs:
-                    self._look_samples = None
-                    return
-                consensus = build_consensus([compute_stats(i) for i in load_references(self._refs)])
-                look = self._build_fitter().fit(consensus)
-            self._look_samples = look(self._base)
-        except Exception as exc:  # surface fitter/IO errors without crashing the UI
-            self._look_samples = None
-            QtWidgets.QMessageBox.warning(self, "LookForge", f"Could not build look:\n{exc}")
+    def _has_inputs(self) -> bool:
+        return (self._before and self._after) if self._is_pairs() else bool(self._refs)
+
+    def _make_fitter(self, fitter, method, space, tone):
+        if fitter == "Mid":
+            return MidFitter(tone_strength=tone)
+        return RichFitter(tone_strength=tone, space=space, method=method)
+
+    # — building the look (pure; safe to run off the UI thread) —
+    def _build_look(self, snap) -> np.ndarray | None:
+        fitter = self._make_fitter(snap["fitter"], snap["method"], snap["space"], snap["tone"])
+        if snap["pairs"]:
+            if not snap["before"] or not snap["after"]:
+                return None
+            consensus = build_consensus([compute_stats(i) for i in load_references(snap["after"])])
+            src = np.concatenate([i.reshape(-1, 3) for i in load_references(snap["before"])])
+            if src.shape[0] > 200_000:
+                src = src[np.random.default_rng(0).choice(src.shape[0], 200_000, replace=False)]
+            return fitter.fit(consensus, source_samples=src)(self._base)
+        if not snap["refs"]:
+            return None
+        consensus = build_consensus([compute_stats(i) for i in load_references(snap["refs"])])
+        return fitter.fit(consensus)(self._base)
 
     def _final_samples(self) -> np.ndarray:
         if self._look_samples is None:
             return self._base
         return regularize(blend(self._base, self._look_samples, self._strength_value()))
 
-    def _do_refit(self) -> None:
-        self._refit()
-        self._update_preview()
+    def _snapshot(self, refit: bool) -> dict:
+        return dict(
+            refit=refit, pairs=self._is_pairs(), refs=list(self._refs),
+            before=list(self._before), after=list(self._after),
+            fitter=self._fitter.currentText(), method=self._method.currentText(),
+            space=self._space.currentText(), tone=self._tone_value(),
+            strength=self._strength_value(), still=self._still,
+            still_dirty=self._still_dirty, look=self._look_samples,
+        )
 
-    def _update_preview(self) -> None:
-        after = apply_cube(self._still, self._final_samples())   # only "after" changes
-        for lbl, img in ((self._before_lbl, self._before_img), (self._after_lbl, after)):
-            lbl.setPixmap(_to_pixmap(img).scaledToWidth(
-                _PREVIEW_W, QtCore.Qt.TransformationMode.SmoothTransformation))
+    # — the worker payload (runs in _ComputeThread) —
+    def _compute(self, snap):
+        look = self._build_look(snap) if snap["refit"] else snap["look"]
+        final = self._base if look is None else regularize(blend(self._base, look, snap["strength"]))
+        after = apply_cube(snap["still"], final)
+        before = apply_cube(snap["still"], self._base) if snap["still_dirty"] else None
+        return look, before, after, snap["refit"]
+
+    # — scheduling: debounce sliders, fire discrete actions now —
+    def _set_busy(self, on: bool) -> None:
+        self._busy.setVisible(on); self._busy_lbl.setVisible(on)
+
+    def _schedule(self, refit: bool) -> None:
+        self._pending_refit = self._pending_refit or refit
+        self._timer.start()                       # restart 2s; keeps waiting while you drag
+
+    def _trigger_now(self, refit: bool) -> None:
+        self._pending_refit = self._pending_refit or refit
+        self._timer.stop(); self._launch_compute()
+
+    def _launch_compute(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            self._timer.start()                   # busy → retry after the next quiet window
+            return
+        snap = self._snapshot(self._pending_refit)
+        self._pending_refit = False
+        self._still_dirty = False
+        self._set_busy(True)
+        self._thread = _ComputeThread(lambda: self._compute(snap))
+        self._thread.done.connect(self._on_computed)
+        self._thread.start()
+
+    def _on_computed(self, result) -> None:
+        self._set_busy(False)
+        if isinstance(result, Exception):
+            QtWidgets.QMessageBox.warning(self, "LookForge", f"Could not build look:\n{result}")
+            return
+        look, before, after, was_refit = result
+        if was_refit:
+            self._look_samples = look
+        if before is not None:
+            self._before_img = before
+        self._show(self._before_lbl, self._before_img)
+        self._show(self._after_lbl, after)
+
+    def _show(self, lbl, img) -> None:
+        lbl.setPixmap(_to_pixmap(img).scaledToWidth(
+            _PREVIEW_W, QtCore.Qt.TransformationMode.SmoothTransformation))
+
+    def _update_preview(self) -> None:   # initial synchronous render (synthetic still is small)
+        self._show(self._before_lbl, self._before_img)
+        self._show(self._after_lbl, apply_cube(self._still, self._final_samples()))
 
     def _sync_controls(self) -> None:
-        # both modes use the OT fitters, so fitter controls are always active.
         rich = self._fitter.currentText() == "Rich"
         self._pages.setCurrentIndex(1 if self._is_pairs() else 0)
         self._method.setEnabled(rich)
@@ -248,15 +331,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # — slots —
     def _on_mode(self, _=None) -> None:
-        self._sync_controls(); self._refit_timer.start()       # debounced rebuild
+        self._sync_controls(); self._trigger_now(True)
 
-    def _on_look_changed(self, _=None) -> None:
+    def _on_fitter_changed(self, _=None) -> None:
+        self._sync_controls(); self._trigger_now(True)         # discrete combo → compute now
+
+    def _on_tone(self, _=None) -> None:
         self._tone_lbl.setText(f"Tone (exposure match): {self._tone_value():.2f}")
-        self._sync_controls(); self._refit_timer.start()       # tone/fitter → rebuild the look (debounced)
+        self._schedule(True)                                   # slider → 2s debounce, rebuild look
 
     def _on_strength(self, _=None) -> None:
         self._strength_lbl.setText(f"Strength: {self._strength_value():.2f}")
-        self._blend_timer.start()                              # strength → cheap re-blend (debounced)
+        self._schedule(False)                                  # slider → 2s debounce, re-blend only
 
     def _add(self, title, store, listw) -> None:
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, title, "", _IMG_FILTER)
@@ -264,7 +350,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if new:
             store.extend(new)
             listw.addItems(new)
-            self._refit(); self._update_preview()
+            self._trigger_now(True)
 
     def _add_refs(self) -> None:
         self._add("Add references", self._refs, self._refs_list)
@@ -280,7 +366,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if item.text() in store:
                 store.remove(item.text())
             listw.takeItem(listw.row(item))
-        self._refit(); self._update_preview()
+        self._trigger_now(True)
 
     def _remove_refs(self) -> None:
         self._remove(self._refs, self._refs_list)
@@ -288,11 +374,19 @@ class MainWindow(QtWidgets.QMainWindow):
     def _load_still(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load DWG/DI preview still", "", _IMG_FILTER)
         if path:
-            self._still = load_preview_still(path)
-            self._before_img = apply_cube(self._still, self._base)  # refresh cached before
-            self._update_preview()
+            self._still = load_preview_still(path)   # full resolution (see preview.load_preview_still)
+            self._still_dirty = True                 # "before" recomputed in the worker
+            self._trigger_now(False)
 
     def _export(self) -> None:
+        if self._look_samples is None and self._has_inputs():
+            try:                                    # ensure the look is current before export
+                self._set_busy(True); QtWidgets.QApplication.processEvents()
+                self._look_samples = self._build_look(self._snapshot(True))
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(self, "LookForge", f"Could not build look:\n{exc}")
+            finally:
+                self._set_busy(False)
         if self._look_samples is None:
             if self._is_pairs():
                 msg = (f"Add NEUTRAL and GRADED images first — now {len(self._before)} neutral, "
@@ -305,6 +399,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if path:
             write_cube(path, self._final_samples(), title="LookForge")
             QtWidgets.QMessageBox.information(self, "LookForge", f"Wrote {path}")
+
+    def closeEvent(self, event) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            self._thread.wait(3000)
+        super().closeEvent(event)
 
     def _save_preset(self) -> None:
         if self._is_pairs():
