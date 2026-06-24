@@ -70,8 +70,10 @@ def test_threaded_compute_builds_look(app, tmp_path):
     w = MainWindow()
     w._refs = paths
     w._refs_list.addItems(paths)
-    w._trigger_now(True)          # runs the look build off-thread + spinner
+    w._launch_compute()           # Compute button → off-thread build + spinner; grays controls
+    assert not w._fitter.isEnabled()          # controls disabled during compute
     _drain(app, w)
+    assert w._fitter.isEnabled()              # re-enabled when done
     assert w._look_samples is not None and w._look_samples.shape == (35937, 3)
     w.close()
 

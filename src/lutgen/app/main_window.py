@@ -79,11 +79,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._before: list[str] = []
         self._after: list[str] = []
 
-        # single debounce timer: restarts on every change, fires once after _DEBOUNCE_MS of quiet.
-        self._timer = QtCore.QTimer(self, singleShot=True, interval=_DEBOUNCE_MS)
-        self._timer.timeout.connect(self._launch_compute)
-        self._pending_refit = False     # whether the next compute must rebuild the look
-        self._still_dirty = False       # whether "before" must be recomputed (new still)
+        # nothing computes automatically — only the Compute button triggers a (threaded) compute.
+        self._still_dirty = True        # recompute "before" on the first/next compute
+        self._dirty = False             # settings changed since last compute
         self._thread: _ComputeThread | None = None
 
         self._build_ui()
@@ -164,6 +162,9 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("Method", self._method)
         form.addRow("Space", self._space)
 
+        self._compute_btn = QtWidgets.QPushButton("Compute preview")
+        self._compute_btn.setStyleSheet("font-weight: bold; padding: 6px;")
+        self._compute_btn.clicked.connect(self._launch_compute)
         export_btn = QtWidgets.QPushButton("Export .cube…")
         preset_btn = QtWidgets.QPushButton("Save preset…")
         export_btn.clicked.connect(self._export)
@@ -180,6 +181,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addWidget(self._strength_lbl)
         left.addWidget(self._strength)
         left.addStretch(1)
+        left.addWidget(self._compute_btn)
         left.addWidget(export_btn)
         left.addWidget(preset_btn)
 
@@ -214,8 +216,8 @@ class MainWindow(QtWidgets.QMainWindow):
         lw = QtWidgets.QWidget(); lw.setLayout(left); lw.setMaximumWidth(340)
         root.addWidget(lw)
         root.addLayout(preview, 1)
-        central = QtWidgets.QWidget(); central.setLayout(root)
-        self.setCentralWidget(central)
+        self._central = QtWidgets.QWidget(); self._central.setLayout(root)
+        self.setCentralWidget(self._central)
 
     def _slider(self, value, slot):
         s = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -318,27 +320,31 @@ class MainWindow(QtWidgets.QMainWindow):
             return apply_cube(looked, self._base, progress=lambda f: report(mid + int((hi - mid) * f)))
         return apply_cube(snap["still"], final, progress=lambda f: report(lo + int((hi - lo) * f)))
 
-    # — scheduling: debounce sliders, fire discrete actions now —
+    # — manual compute (Compute button only) —
     def _set_busy(self, on: bool) -> None:
         if on:
             self._busy.setValue(0)
         self._busy.setVisible(on); self._busy_lbl.setVisible(on)
 
-    def _schedule(self, refit: bool) -> None:
-        self._pending_refit = self._pending_refit or refit
-        self._timer.start()                       # restart 2s; keeps waiting while you drag
+    def _set_controls_enabled(self, on: bool) -> None:
+        for cls in (QtWidgets.QComboBox, QtWidgets.QSlider, QtWidgets.QPushButton, QtWidgets.QListWidget):
+            for w in self._central.findChildren(cls):
+                w.setEnabled(on)
+        if on:
+            self._sync_controls()                 # restore method/space enabled-state
 
-    def _trigger_now(self, refit: bool) -> None:
-        self._pending_refit = self._pending_refit or refit
-        self._timer.stop(); self._launch_compute()
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+        self._compute_btn.setText("Compute preview ●")   # ● = changes pending
 
-    def _launch_compute(self) -> None:
+    def _launch_compute(self, _=None) -> None:
         if self._thread is not None and self._thread.isRunning():
-            self._timer.start()                   # busy → retry after the next quiet window
             return
-        snap = self._snapshot(self._pending_refit)
-        self._pending_refit = False
+        snap = self._snapshot(refit=True)         # the button always rebuilds the look
         self._still_dirty = False
+        self._dirty = False
+        self._compute_btn.setText("Computing…")
+        self._set_controls_enabled(False)         # gray everything out
         self._set_busy(True)
         self._thread = _ComputeThread(lambda report: self._compute(snap, report))
         self._thread.progress.connect(self._busy.setValue)
@@ -347,12 +353,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_computed(self, result) -> None:
         self._set_busy(False)
+        self._set_controls_enabled(True)
+        self._compute_btn.setText("Compute preview")
         if isinstance(result, Exception):
             QtWidgets.QMessageBox.warning(self, "LookForge", f"Could not build look:\n{result}")
             return
-        look, before, after, was_refit = result
-        if was_refit:
-            self._look_samples = look
+        look, before, after, _was_refit = result
+        self._look_samples = look
         if before is not None:
             self._before_img = before
         self._show(self._before_lbl, self._before_img)
@@ -372,23 +379,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self._method.setEnabled(rich)
         self._space.setEnabled(rich)
 
-    # — slots —
+    # — slots (no auto-compute; everything just marks "changes pending") —
     def _on_mode(self, _=None) -> None:
-        self._sync_controls(); self._trigger_now(True)
+        self._sync_controls(); self._mark_dirty()
 
     def _on_fitter_changed(self, _=None) -> None:
-        self._sync_controls(); self._trigger_now(True)         # discrete combo → compute now
+        self._sync_controls(); self._mark_dirty()
 
     def _on_placement(self, _=None) -> None:
-        self._trigger_now(False)   # look unchanged; only re-assemble + preview
+        self._mark_dirty()
 
     def _on_tone(self, _=None) -> None:
         self._tone_lbl.setText(f"Tone (exposure match): {self._tone_value():.2f}")
-        self._schedule(True)                                   # slider → 2s debounce, rebuild look
+        self._mark_dirty()
 
     def _on_strength(self, _=None) -> None:
         self._strength_lbl.setText(f"Strength: {self._strength_value():.2f}")
-        self._schedule(False)                                  # slider → 2s debounce, re-blend only
+        self._mark_dirty()
 
     def _add(self, title, store, listw) -> None:
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, title, "", _IMG_FILTER)
@@ -396,23 +403,23 @@ class MainWindow(QtWidgets.QMainWindow):
         if new:
             store.extend(new)
             listw.addItems(new)
-            self._trigger_now(True)
+            self._mark_dirty()
 
     def _add_refs(self) -> None:
         self._add("Add references", self._refs, self._refs_list)
 
     def _add_before(self) -> None:
-        self._add("Add BEFORE (neutral) frames", self._before, self._before_list)
+        self._add("Add NEUTRAL (your footage) frames", self._before, self._before_list)
 
     def _add_after(self) -> None:
-        self._add("Add AFTER (graded) frames", self._after, self._after_list)
+        self._add("Add GRADED (the look) frames", self._after, self._after_list)
 
     def _remove(self, store, listw) -> None:
         for item in listw.selectedItems():
             if item.text() in store:
                 store.remove(item.text())
             listw.takeItem(listw.row(item))
-        self._trigger_now(True)
+        self._mark_dirty()
 
     def _remove_refs(self) -> None:
         self._remove(self._refs, self._refs_list)
@@ -421,8 +428,8 @@ class MainWindow(QtWidgets.QMainWindow):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load DWG/DI preview still", "", _IMG_FILTER)
         if path:
             self._still = load_preview_still(path)   # full resolution (see preview.load_preview_still)
-            self._still_dirty = True                 # "before" recomputed in the worker
-            self._trigger_now(False)
+            self._still_dirty = True                 # "before" recomputed on next Compute
+            self._mark_dirty()
 
     def _export(self) -> None:
         if self._look_samples is None and self._has_inputs():
