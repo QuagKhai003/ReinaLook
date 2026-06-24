@@ -46,6 +46,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="rich transport space (default oklab, perceptual)")
     r.add_argument("--method", choices=["mkl", "pdf"], default="mkl",
                    help="rich OT method: mkl (mean+cov) or pdf (Pitié IDT, full distribution)")
+    r.add_argument("--placement", choices=["node2", "between"], default="node2",
+                   help="node2: replace Node 2 (DWG/DI->Rec.709+look); between: DWG/DI look between Node 1&2")
     r.add_argument("--preset", default=None, help="load refs/strength/title from a preset JSON")
     r.add_argument("--save-preset", default=None, help="write the settings used to a preset JSON")
     r.add_argument("--max-dim", type=int, default=1024, help="downscale refs to this max side")
@@ -71,6 +73,8 @@ def _build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--after", nargs="+", required=True, help="graded frames (same frames, final look)")
     rp.add_argument("--strength", type=float, default=1.0, help="look strength 0..1 (default 1.0)")
     rp.add_argument("--smoothing", type=float, default=0.8, help="grade smoothing sigma (default 0.8)")
+    rp.add_argument("--placement", choices=["node2", "between"], default="node2",
+                    help="node2: replace Node 2; between: DWG/DI look between Node 1&2")
     rp.add_argument("--out", "-o", required=True, help="output .cube path")
     rp.add_argument("--title", default=None, help="cube TITLE")
     rp.add_argument("--max-dim", type=int, default=1024, help="downscale frames to this max side")
@@ -100,15 +104,17 @@ def _cmd_render(args: argparse.Namespace) -> int:
     fitter = _FITTERS[args.fitter](**kwargs)
     if args.source:                       # unpaired neutral→graded transport (ADR-0016)
         cube = render_cube_dual(args.source, refs, strength, fitter=fitter, title=title,
-                                max_dim=args.max_dim)
+                                placement=args.placement, max_dim=args.max_dim)
         note = f"{len(args.source)} source + {len(refs)} target"
     else:
-        cube = render_cube(refs, strength, title=title, fitter=fitter, max_dim=args.max_dim)
+        cube = render_cube(refs, strength, title=title, fitter=fitter,
+                           placement=args.placement, max_dim=args.max_dim)
         note = f"{len(refs)} refs"
     write_cube(args.out, cube.samples, cube.size, title=cube.title)
     if args.save_preset:
         save_preset(args.save_preset, refs, strength, title)
-    print(f"wrote {args.out}  (replace Node 2, {args.fitter} fitter, {note}, strength {strength})")
+    where = "between Node 1&2" if args.placement == "between" else "replace Node 2"
+    print(f"wrote {args.out}  ({where}, {args.fitter} fitter, {note}, strength {strength})")
     return 0
 
 
@@ -132,7 +138,7 @@ def _cmd_render_pairs(args: argparse.Namespace) -> int:
         return 2
     cube = render_cube_from_pairs(
         args.before, args.after, args.strength,
-        smoothing=args.smoothing, title=args.title, max_dim=args.max_dim,
+        smoothing=args.smoothing, title=args.title, placement=args.placement, max_dim=args.max_dim,
     )
     write_cube(args.out, cube.samples, cube.size, title=cube.title)
     print(f"wrote {args.out}  (learned grade from {len(args.before)} pairs, strength {args.strength})")
