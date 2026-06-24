@@ -1,12 +1,14 @@
 """main_window — the PySide6 desktop shell (thin; all logic is in the engine).
 
-@context  Wires widgets to the tested pipeline: references list, strength slider, before/after
-          preview, export, save preset. No color math here (Plan §3, ADR-0007).
-@done     MainWindow with add/remove refs, live preview, export, save preset.
-@todo     Thumbnails, drag-drop polish, packaging (PyInstaller).
-@limits   Imports PySide6 (only when the GUI runs). Look refit on ref change; re-blend on strength.
-@affects  Uses orchestration.pipeline/preset, engine.base/strength/regularize, app.preview.
-          Launched by app/run.py. See ADR-0007.
+@context  Wires widgets to the tested fitters: references OR before/after pairs, fitter/method/
+          space/tone/strength controls, before/after preview, export, save preset. No color math
+          here (Plan §3, ADR-0007/0014).
+@done     MainWindow: references + pairs modes; Mid/Rich(mkl|pdf, oklab|rgb) controls; tone +
+          strength sliders; live preview; export; save preset.
+@todo     Thumbnails, drag-drop, packaging (PyInstaller).
+@limits   Imports PySide6 (only when the GUI runs). Look refit on any look control; re-blend on strength.
+@affects  Uses fitters (mid/rich/pairs), engine.base/strength/regularize, app.preview, preset.
+          Launched by app/run.py. See ADR-0007/0014.
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ from lutgen.engine.base import load_base
 from lutgen.engine.cube_io import write_cube
 from lutgen.engine.regularize import regularize
 from lutgen.engine.strength import blend
+from lutgen.fitter.mid import MidFitter
+from lutgen.fitter.pairs import PairsFitter
 from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.consensus import build_consensus
 from lutgen.orchestration.ingest import load_references
@@ -27,7 +31,7 @@ from lutgen.orchestration.stats import compute_stats
 from .preview import before_after, load_preview_still, make_test_still
 
 _IMG_FILTER = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.exr)"
-_PREVIEW_W = 460  # displayed preview width (px)
+_PREVIEW_W = 460
 
 
 def _to_pixmap(img: np.ndarray) -> QtGui.QPixmap:
@@ -37,76 +41,163 @@ def _to_pixmap(img: np.ndarray) -> QtGui.QPixmap:
     return QtGui.QPixmap.fromImage(qimg)
 
 
+def _file_list():
+    w = QtWidgets.QListWidget()
+    w.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+    w.setMaximumHeight(110)
+    return w
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("LookForge")
-        self._refs: list[str] = []
         self._base = load_base()
         self._still = make_test_still()
         self._look_samples: np.ndarray | None = None
+        self._refs: list[str] = []
+        self._before: list[str] = []
+        self._after: list[str] = []
 
-        self._refs_list = QtWidgets.QListWidget()
-        add_btn = QtWidgets.QPushButton("+ Add references…")
-        rm_btn = QtWidgets.QPushButton("Remove selected")
-        add_btn.clicked.connect(self._add_refs)
-        rm_btn.clicked.connect(self._remove_selected)
+        self._build_ui()
+        self._sync_controls()
+        self._update_preview()
 
-        self._strength = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self._strength.setRange(0, 100)
-        self._strength.setValue(80)
+    # — UI —
+    def _build_ui(self) -> None:
+        self._mode = QtWidgets.QComboBox()
+        self._mode.addItems(["References", "Before/After pairs"])
+        self._mode.currentIndexChanged.connect(self._on_mode)
+
+        # references page
+        self._refs_list = _file_list()
+        refs_add = QtWidgets.QPushButton("+ Add references…")
+        refs_rm = QtWidgets.QPushButton("Remove selected")
+        refs_add.clicked.connect(self._add_refs)
+        refs_rm.clicked.connect(self._remove_refs)
+        refs_page = QtWidgets.QWidget()
+        rl = QtWidgets.QVBoxLayout(refs_page)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(QtWidgets.QLabel("Reference images (the target look)"))
+        rl.addWidget(self._refs_list)
+        rl.addWidget(refs_add)
+        rl.addWidget(refs_rm)
+
+        # pairs page
+        self._before_list = _file_list()
+        self._after_list = _file_list()
+        before_add = QtWidgets.QPushButton("+ Add BEFORE (neutral)…")
+        after_add = QtWidgets.QPushButton("+ Add AFTER (graded)…")
+        before_add.clicked.connect(self._add_before)
+        after_add.clicked.connect(self._add_after)
+        pairs_page = QtWidgets.QWidget()
+        pl = QtWidgets.QVBoxLayout(pairs_page)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.addWidget(QtWidgets.QLabel("BEFORE frames (Node 1+2, no grade)"))
+        pl.addWidget(self._before_list)
+        pl.addWidget(before_add)
+        pl.addWidget(QtWidgets.QLabel("AFTER frames (same frames, graded)"))
+        pl.addWidget(self._after_list)
+        pl.addWidget(after_add)
+
+        self._pages = QtWidgets.QStackedWidget()
+        self._pages.addWidget(refs_page)
+        self._pages.addWidget(pairs_page)
+
+        # fitter controls (references mode)
+        self._fitter = QtWidgets.QComboBox(); self._fitter.addItems(["Rich", "Mid"])
+        self._method = QtWidgets.QComboBox(); self._method.addItems(["mkl", "pdf"])
+        self._space = QtWidgets.QComboBox(); self._space.addItems(["oklab", "rgb"])
+        for c in (self._fitter, self._method, self._space):
+            c.currentIndexChanged.connect(self._on_look_changed)
+
+        self._tone = self._slider(100, self._on_look_changed)
+        self._tone_lbl = QtWidgets.QLabel("Tone (exposure match): 1.00")
+        self._strength = self._slider(80, self._on_strength)
         self._strength_lbl = QtWidgets.QLabel("Strength: 0.80")
-        self._strength.valueChanged.connect(self._on_strength)
+
+        form = QtWidgets.QFormLayout()
+        form.addRow("Fitter", self._fitter)
+        form.addRow("Method", self._method)
+        form.addRow("Space", self._space)
 
         export_btn = QtWidgets.QPushButton("Export .cube…")
         preset_btn = QtWidgets.QPushButton("Save preset…")
         export_btn.clicked.connect(self._export)
         preset_btn.clicked.connect(self._save_preset)
 
-        self._before = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-        self._after = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-        still_btn = QtWidgets.QPushButton("Load preview still (DWG/DI frame)…")
-        still_btn.clicked.connect(self._load_still)
-
         left = QtWidgets.QVBoxLayout()
-        left.addWidget(QtWidgets.QLabel("References"))
-        left.addWidget(self._refs_list, 1)
-        left.addWidget(add_btn)
-        left.addWidget(rm_btn)
-        left.addSpacing(12)
+        left.addWidget(QtWidgets.QLabel("Mode"))
+        left.addWidget(self._mode)
+        left.addWidget(self._pages)
+        left.addSpacing(8)
+        left.addLayout(form)
+        left.addWidget(self._tone_lbl)
+        left.addWidget(self._tone)
         left.addWidget(self._strength_lbl)
         left.addWidget(self._strength)
         left.addStretch(1)
         left.addWidget(export_btn)
         left.addWidget(preset_btn)
 
+        self._before_lbl = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._after_lbl = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        still_btn = QtWidgets.QPushButton("Load preview still (DWG/DI frame)…")
+        still_btn.clicked.connect(self._load_still)
         preview = QtWidgets.QVBoxLayout()
         preview.addWidget(still_btn)
-        preview.addWidget(QtWidgets.QLabel("Before (base)"))
-        preview.addWidget(self._before, 1)
-        preview.addWidget(QtWidgets.QLabel("After (look)"))
-        preview.addWidget(self._after, 1)
+        preview.addWidget(QtWidgets.QLabel("Before (your original / base)"))
+        preview.addWidget(self._before_lbl, 1)
+        preview.addWidget(QtWidgets.QLabel("After (final look)"))
+        preview.addWidget(self._after_lbl, 1)
 
         root = QtWidgets.QHBoxLayout()
-        root.addLayout(left, 0)
+        lw = QtWidgets.QWidget(); lw.setLayout(left); lw.setMaximumWidth(340)
+        root.addWidget(lw)
         root.addLayout(preview, 1)
-        central = QtWidgets.QWidget()
-        central.setLayout(root)
+        central = QtWidgets.QWidget(); central.setLayout(root)
         self.setCentralWidget(central)
 
-        self._update_preview()
+    def _slider(self, value, slot):
+        s = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        s.setRange(0, 100); s.setValue(value); s.valueChanged.connect(slot)
+        return s
 
     # — state —
+    def _tone_value(self) -> float:
+        return self._tone.value() / 100.0
+
     def _strength_value(self) -> float:
         return self._strength.value() / 100.0
 
+    def _is_pairs(self) -> bool:
+        return self._mode.currentIndex() == 1
+
+    def _build_fitter(self):
+        tone = self._tone_value()
+        if self._fitter.currentText() == "Mid":
+            return MidFitter(tone_strength=tone)
+        return RichFitter(tone_strength=tone, space=self._space.currentText(),
+                          method=self._method.currentText())
+
     def _refit(self) -> None:
-        if not self._refs:
+        try:
+            if self._is_pairs():
+                if not self._before or len(self._before) != len(self._after):
+                    self._look_samples = None
+                    return
+                look = PairsFitter().fit_from_pairs(
+                    load_references(self._before), load_references(self._after))
+            else:
+                if not self._refs:
+                    self._look_samples = None
+                    return
+                consensus = build_consensus([compute_stats(i) for i in load_references(self._refs)])
+                look = self._build_fitter().fit(consensus)
+            self._look_samples = look(self._base)
+        except Exception as exc:  # surface fitter/IO errors without crashing the UI
             self._look_samples = None
-            return
-        images = load_references(self._refs)
-        consensus = build_consensus([compute_stats(i) for i in images])
-        self._look_samples = RichFitter().fit(consensus)(self._base)
+            QtWidgets.QMessageBox.warning(self, "LookForge", f"Could not build look:\n{exc}")
 
     def _final_samples(self) -> np.ndarray:
         if self._look_samples is None:
@@ -115,42 +206,71 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_preview(self) -> None:
         before, after = before_after(self._still, self._base, self._final_samples())
-        self._before.setPixmap(_to_pixmap(before).scaledToWidth(
-            _PREVIEW_W, QtCore.Qt.TransformationMode.SmoothTransformation))
-        self._after.setPixmap(_to_pixmap(after).scaledToWidth(
-            _PREVIEW_W, QtCore.Qt.TransformationMode.SmoothTransformation))
+        for lbl, img in ((self._before_lbl, before), (self._after_lbl, after)):
+            lbl.setPixmap(_to_pixmap(img).scaledToWidth(
+                _PREVIEW_W, QtCore.Qt.TransformationMode.SmoothTransformation))
+
+    def _sync_controls(self) -> None:
+        pairs = self._is_pairs()
+        rich = self._fitter.currentText() == "Rich"
+        self._pages.setCurrentIndex(1 if pairs else 0)
+        for w in (self._fitter, self._tone):
+            w.setEnabled(not pairs)
+        self._method.setEnabled(not pairs and rich)
+        self._space.setEnabled(not pairs and rich)
 
     # — slots —
-    def _add_refs(self) -> None:
-        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Add references", "", _IMG_FILTER)
-        for p in paths:
-            self._refs.append(p)
-            self._refs_list.addItem(p)
-        if paths:
-            self._refit()
-            self._update_preview()
+    def _on_mode(self, _=None) -> None:
+        self._sync_controls(); self._refit(); self._update_preview()
 
-    def _remove_selected(self) -> None:
+    def _on_look_changed(self, _=None) -> None:
+        self._tone_lbl.setText(f"Tone (exposure match): {self._tone_value():.2f}")
+        self._sync_controls(); self._refit(); self._update_preview()
+
+    def _on_strength(self, _=None) -> None:
+        self._strength_lbl.setText(f"Strength: {self._strength_value():.2f}")
+        self._update_preview()
+
+    def _pick(self, title):
+        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, title, "", _IMG_FILTER)
+        return paths
+
+    def _add_refs(self) -> None:
+        p = self._pick("Add references")
+        if p:
+            self._refs += p
+            self._refs_list.addItems(p)
+            self._refit(); self._update_preview()
+
+    def _remove_refs(self) -> None:
         for item in self._refs_list.selectedItems():
             self._refs.remove(item.text())
             self._refs_list.takeItem(self._refs_list.row(item))
-        self._refit()
-        self._update_preview()
+        self._refit(); self._update_preview()
 
-    def _on_strength(self, value: int) -> None:
-        self._strength_lbl.setText(f"Strength: {value / 100.0:.2f}")
-        self._update_preview()
+    def _add_before(self) -> None:
+        p = self._pick("Add BEFORE (neutral) frames")
+        if p:
+            self._before += p
+            self._before_list.addItems(p)
+            self._refit(); self._update_preview()
+
+    def _add_after(self) -> None:
+        p = self._pick("Add AFTER (graded) frames")
+        if p:
+            self._after += p
+            self._after_list.addItems(p)
+            self._refit(); self._update_preview()
 
     def _load_still(self) -> None:
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Load DWG/DI preview still", "", _IMG_FILTER)
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load DWG/DI preview still", "", _IMG_FILTER)
         if path:
             self._still = load_preview_still(path)
             self._update_preview()
 
     def _export(self) -> None:
-        if not self._refs:
-            QtWidgets.QMessageBox.warning(self, "LookForge", "Add references first.")
+        if self._look_samples is None:
+            QtWidgets.QMessageBox.warning(self, "LookForge", "Add references (or before/after pairs) first.")
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export .cube", "look.cube", "Cube (*.cube)")
         if path:
@@ -158,6 +278,9 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.information(self, "LookForge", f"Wrote {path}")
 
     def _save_preset(self) -> None:
+        if self._is_pairs():
+            QtWidgets.QMessageBox.information(self, "LookForge", "Presets apply to References mode.")
+            return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save preset", "look.json", "JSON (*.json)")
         if path:
             save_preset(path, self._refs, self._strength_value(), title="LookForge")
