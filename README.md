@@ -12,7 +12,7 @@
 
 ## ✨ What is ReinaLook?
 
-ReinaLook is a desktop app that generates a **33/65-point 3D `.cube` LUT** for **DaVinci Resolve**.
+ReinaLook is a desktop app that generates a **3D `.cube` LUT** for **DaVinci Resolve**.
 You feed it a few **reference images** (frames whose color grade you love), and it bakes that look —
 warm/teal, filmic, moody, whatever — into one LUT you drop into your node graph.
 
@@ -39,13 +39,12 @@ your footage ──▶ [Node 1: → DWG/DI] ──▶ [ReinaLook .cube] ──�
 3. It bakes that look over the **exact** DWG/DI → Rec.709 conversion and writes a `.cube`.
 4. You load the `.cube` in Resolve. One node. Rides on every shot.
 
-**Three ways to capture a look (pick what you have):**
+**Two ways to capture a look (pick what you have):**
 
 | Mode | You provide | Best for |
 |------|-------------|----------|
 | **References** | graded stills of the look | the usual case |
 | **Neutral + Graded (unpaired)** | a pool of your neutral frames + a pool of graded examples | better calibration to *your* footage |
-| **Before/After pairs** | the same frames neutral **and** graded | cloning your *exact* grade, no guesswork |
 
 **Look engines (all real, explainable math — no black box):**
 - **Rich / MKL** — matches the references' mean + full color covariance (palette).
@@ -57,25 +56,19 @@ your footage ──▶ [Node 1: → DWG/DI] ──▶ [ReinaLook .cube] ──�
 
 ## ⚔️ ReinaLook vs Higgsfield AI LUT
 
-Higgsfield's AI LUT generator is free and slick — but it's a **cloud, AI-image tool**. ReinaLook is a
-**deterministic color-science tool that lives on your desktop**. Different philosophy:
+Both are free. The difference is the approach: Higgsfield's AI LUT generator runs an AI model in the
+**cloud/browser**, while ReinaLook is a **desktop color-science tool** built around your Resolve
+DWG/DI → Rec.709 conversion.
 
 | | **ReinaLook** | **Higgsfield AI LUT** |
 |---|---|---|
-| **Runs** | 100% **offline** on your PC | Cloud / browser, needs internet + account |
-| **Your footage/photos** | **Never leave your machine** | Uploaded to their servers |
-| **Method** | **Deterministic color science** (optimal transport, Oklab) — explainable, repeatable | AI model — a black box, results vary |
-| **Same input → same output?** | **Always identical** | Not guaranteed |
-| **Built for Resolve** | **Yes** — exact DWG/DI → Rec.709 base, replace Node 2 or sit between nodes | Generic LUT |
-| **Conversion accuracy** | **Bit-exact** base (your real Resolve CST); strength 0 = untouched | N/A |
-| **Clone *your* exact grade** | **Yes** (before/after pairs mode) | No |
-| **Resolution** | 33 **or 65-point** cubes | Typically fixed |
-| **Cost / limits** | **Free, unlimited, no login** | Free tier, account, rate limits |
-| **Privacy** | Total | Cloud ToS apply |
+| **Runs** | Desktop app, offline | Cloud / browser |
+| **Method** | Color-science (optimal transport, Oklab) | AI model |
+| **Built around Resolve** | Yes — DWG/DI → Rec.709 base, replace Node 2 or sit between nodes | Generic LUT |
+| **Cost** | Free, no login | Free |
 
-**Use Higgsfield** if you want a quick AI vibe with no setup and don't mind the cloud.
-**Use ReinaLook** if you want **accuracy, privacy, repeatability, and a LUT engineered for your exact
-Resolve pipeline** — that you can tune, clone, and trust shot to shot.
+Pick whichever fits your workflow — a quick AI vibe in the browser, or a desktop LUT tuned to your
+Resolve pipeline.
 
 ---
 
@@ -118,7 +111,6 @@ reinalook-gui          # or:  python -m lutgen.app
    - **References (graded only)** — the simplest. You'll add stills of the look you want.
    - **Neutral + Graded (unpaired)** — add a pool of *your* neutral frames **and** a pool of graded
      examples (any counts, different scenes OK).
-   - *(Before/After pairs is available via the command line for exact-grade cloning — see below.)*
 3. **Add reference images:** click **+ Add references…** and select your look stills (JPG/PNG/TIFF).
 4. **Choose the look engine** (sensible defaults are fine):
    - **Placement:** `Replace CSTout` (most accurate — swaps your Node 2) or `Between CSTs` (sits
@@ -129,9 +121,11 @@ reinalook-gui          # or:  python -m lutgen.app
 5. **Set the dials:**
    - **Tone** — lower keeps your footage's brightness; higher also matches the references' exposure.
    - **Strength** — how strong the look is (0 = your original, 1 = full look).
-6. **(Optional) Load a preview still:** click **Load preview still (DWG/DI frame)…** and pick a
-   **flat/log frame from your project** (a clip with Node 1 on, Node 2 off) to see a real *before /
-   after* on the right. It appears instantly.
+6. **(Optional) Load a preview still** to see the look on your own frame inside the app:
+   - In Resolve, on any clip, keep **Node 1** (your → DWG/DI conversion) and **turn Node 2 OFF**.
+   - Right-click the viewer → **Grab Still**, then right-click the still → **Export** as a PNG/JPG.
+   - Back in ReinaLook, click **Load preview still…** and pick that file. It shows *before / after*
+     on the right, instantly. (This is only for previewing — it's never needed to make the LUT.)
 7. **Click `Compute preview`** to render the look (a progress % shows; controls grey out while it
    works). Tweak dials and re-Compute until you like it.
 8. **Click `Export .cube…`** and save the LUT. (Optionally **Save preset…** to reuse the recipe.)
@@ -153,9 +147,6 @@ reinalook render --refs r1.png r2.png r3.png --fitter rich --method pdf --space 
 
 # Unpaired pools (your neutral footage + graded examples):
 reinalook render --source neutral1.png neutral2.png --refs graded1.png graded2.png --out look.cube
-
-# Clone your EXACT grade from before/after frames (same frame, grade off vs on):
-reinalook render-pairs --before n1.png n2.png --after g1.png g2.png --out my_grade.cube
 ```
 
 ---
@@ -188,28 +179,16 @@ Your own exported `.cube` / preset `.json` files (wherever *you* saved them) are
 ## ❓ FAQ
 
 - **Do I need DaVinci Resolve Studio?** No — the free version loads `.cube` LUTs.
-- **Does it need my source footage?** No. It synthesizes the DWG/DI input domain; you only need
-  reference images (and optionally one flat preview frame).
-- **Why does the base look exact but Replace softens a hair at 300% zoom?** A LUT samples a continuous
-  conversion at grid points; 65-point minimizes it. Use 65-point base / `Between CSTs` if you need
-  maximum sharpness.
-- **Is my data private?** Completely. Nothing is uploaded; there's no network call at all.
-
----
-
-## 🛠️ For maintainers — cut a release
-
-The installer pulls a prebuilt `ReinaLook.exe` from GitHub Releases:
-
-```bash
-pip install -e ".[gui,package]"
-pyinstaller --noconfirm packaging/ReinaLook.spec      # → dist/ReinaLook.exe
-```
-Then create a GitHub Release (e.g. tag `v1.0.0`) and upload `dist/ReinaLook.exe` as an asset named
-exactly **`ReinaLook.exe`**. The one-line installer always fetches the latest release.
+- **Do I need to give it my whole project / source footage?** No. You only need a few **reference
+  images** (graded stills of the look you want). You don't export your timeline. Optionally, to
+  preview the look inside the app on one of your own frames, you can load a single still (see step 6
+  above) — but that's just for the preview, not for making the LUT.
+- **What image formats can I use for references?** PNG, JPG/JPEG, TIFF.
+- **Is anything uploaded?** No. The app runs entirely on your computer and makes no network calls.
+  (The one-line installer downloads the app from GitHub the first time — that's the only download.)
 
 ---
 
 <div align="center">
-Made for colorists who want the look <b>and</b> the control. • Free • Offline • Deterministic
+Made for colorists who want the look — free, offline, on your desktop.
 </div>
