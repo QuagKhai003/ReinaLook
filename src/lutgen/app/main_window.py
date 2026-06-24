@@ -16,6 +16,7 @@ from __future__ import annotations
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from lutgen.engine.apply import apply_cube
 from lutgen.engine.base import load_base
 from lutgen.engine.cube_io import write_cube
 from lutgen.engine.regularize import regularize
@@ -27,10 +28,12 @@ from lutgen.orchestration.ingest import load_references
 from lutgen.orchestration.preset import save_preset
 from lutgen.orchestration.stats import compute_stats
 
-from .preview import before_after, load_preview_still, make_test_still
+from .preview import load_preview_still, make_test_still
 
 _IMG_FILTER = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.exr)"
 _PREVIEW_W = 460
+_REFIT_MS = 240   # debounce before rebuilding the look (tone/fitter changes)
+_BLEND_MS = 50    # debounce before re-rendering the preview (strength changes)
 
 
 def _to_pixmap(img: np.ndarray) -> QtGui.QPixmap:
@@ -53,10 +56,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("LookForge")
         self._base = load_base()
         self._still = make_test_still()
+        self._before_img = apply_cube(self._still, self._base)  # cached: never changes
         self._look_samples: np.ndarray | None = None
         self._refs: list[str] = []
         self._before: list[str] = []
         self._after: list[str] = []
+
+        # debounce timers — coalesce rapid slider ticks so we don't recompute mid-drag
+        self._refit_timer = QtCore.QTimer(self, singleShot=True, interval=_REFIT_MS)
+        self._refit_timer.timeout.connect(self._do_refit)
+        self._blend_timer = QtCore.QTimer(self, singleShot=True, interval=_BLEND_MS)
+        self._blend_timer.timeout.connect(self._update_preview)
 
         self._build_ui()
         self._sync_controls()
@@ -219,9 +229,13 @@ class MainWindow(QtWidgets.QMainWindow):
             return self._base
         return regularize(blend(self._base, self._look_samples, self._strength_value()))
 
+    def _do_refit(self) -> None:
+        self._refit()
+        self._update_preview()
+
     def _update_preview(self) -> None:
-        before, after = before_after(self._still, self._base, self._final_samples())
-        for lbl, img in ((self._before_lbl, before), (self._after_lbl, after)):
+        after = apply_cube(self._still, self._final_samples())   # only "after" changes
+        for lbl, img in ((self._before_lbl, self._before_img), (self._after_lbl, after)):
             lbl.setPixmap(_to_pixmap(img).scaledToWidth(
                 _PREVIEW_W, QtCore.Qt.TransformationMode.SmoothTransformation))
 
@@ -234,15 +248,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # — slots —
     def _on_mode(self, _=None) -> None:
-        self._sync_controls(); self._refit(); self._update_preview()
+        self._sync_controls(); self._refit_timer.start()       # debounced rebuild
 
     def _on_look_changed(self, _=None) -> None:
         self._tone_lbl.setText(f"Tone (exposure match): {self._tone_value():.2f}")
-        self._sync_controls(); self._refit(); self._update_preview()
+        self._sync_controls(); self._refit_timer.start()       # tone/fitter → rebuild the look (debounced)
 
     def _on_strength(self, _=None) -> None:
         self._strength_lbl.setText(f"Strength: {self._strength_value():.2f}")
-        self._update_preview()
+        self._blend_timer.start()                              # strength → cheap re-blend (debounced)
 
     def _add(self, title, store, listw) -> None:
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, title, "", _IMG_FILTER)
@@ -275,6 +289,7 @@ class MainWindow(QtWidgets.QMainWindow):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load DWG/DI preview still", "", _IMG_FILTER)
         if path:
             self._still = load_preview_still(path)
+            self._before_img = apply_cube(self._still, self._base)  # refresh cached before
             self._update_preview()
 
     def _export(self) -> None:
