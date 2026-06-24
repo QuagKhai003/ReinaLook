@@ -24,7 +24,6 @@ env/
 .ruff_cache/
 .coverage
 htmlcov/
-tests/
 
 # ── Editors / OS ─────────────────────────────────────────────────────
 .vscode/
