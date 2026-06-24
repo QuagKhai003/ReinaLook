@@ -58,7 +58,11 @@ and any adjustments between nodes. The cube does the conversion **and** the look
 lutgen render --refs r1.png r2.png r3.png --fitter rich --space oklab --method pdf \
               --strength 0.8 --tone 0.5 --out look.cube --title "My look"
 
-# Learn the EXACT grade from before/after frames:
+# Unpaired pools: transport your NEUTRAL footage toward GRADED examples (any counts, any scenes):
+lutgen render --source neutral1.png neutral2.png --refs graded1.png graded2.png graded3.png \
+              --fitter rich --method pdf --out look.cube
+
+# Learn the EXACT grade from before/after frames (same frame, neutral + graded):
 lutgen render-pairs --before n1.png n2.png --after g1.png g2.png --out my_grade.cube
 
 # strength 0 = the pure base (your Node 2). Presets:
