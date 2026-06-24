@@ -64,6 +64,25 @@ def test_dual_pool_unpaired(tmp_path):
         render_cube_dual(src, tgt, 0.0, fitter=RichFitter(space="rgb")).samples, base)  # s0==base
 
 
+def test_placement_between(tmp_path):
+    from lutgen.engine.apply import apply_cube
+    from lutgen.engine.grid import identity_grid
+    from lutgen.fitter.rich import RichFitter
+
+    refs = _refs(tmp_path)
+    base = load_base()
+    grid = identity_grid()
+    # between + strength 0 → identity grid (pass-through; Node 2 unchanged)
+    c0 = render_cube(refs, 0.0, placement="between")
+    np.testing.assert_allclose(c0.samples, grid, atol=1e-9)
+    # between-cube then Node 2 ≈ the replace-Node-2 cube (same final look)
+    cb = render_cube(refs, 1.0, placement="between", fitter=RichFitter(space="rgb"))
+    cn = render_cube(refs, 1.0, placement="node2", fitter=RichFitter(space="rgb"))
+    chained = apply_cube(cb.samples, base)            # apply our between cube, then Node 2
+    assert np.abs(chained - cn.samples).mean() < 0.05
+    assert cb.samples.min() >= 0.0 and cb.samples.max() <= 1.0
+
+
 def test_strength_scales_effect(tmp_path):
     refs = _refs(tmp_path)
     base = load_base()

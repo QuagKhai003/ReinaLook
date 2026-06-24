@@ -28,19 +28,36 @@ from .ingest import load_references
 from .stats import compute_stats
 
 
+def _assemble(looked_full: np.ndarray, strength: float, placement: str, size: int) -> np.ndarray:
+    """Turn a full-strength looked-base (Rec.709) into the final cube samples for the chosen
+    placement, blended by ``strength``.
+
+    - ``"node2"`` (replace Node 2): DWG/DI → Rec.709 + look. ``strength=0`` → base, bit-for-bit.
+    - ``"between"`` (between Node 1 & 2): DWG/DI → DWG/DI look only; Node 2 still converts after, so
+      brightness/contrast/saturation are preserved. The full look is mapped back to DWG/DI via the
+      inverse base cube, then blended with the identity grid. ``strength=0`` → identity (pass-through).
+    """
+    base = load_base(size)
+    if placement == "between":
+        dwgdi_full = apply_cube(regularize(looked_full, size), load_base_inverse(size), size)
+        return regularize(blend(identity_grid(size), dwgdi_full, strength), size)
+    return regularize(blend(base, looked_full, strength), size)
+
+
 def render_cube(
     ref_paths,
     strength: float = 1.0,
     *,
     title: str | None = None,
     fitter: LookFitter | None = None,
+    placement: str = "node2",
     max_dim: int | None = 1024,
     size: int = DEFAULT_SIZE,
 ) -> Cube:
     """Build a finished `.cube` from reference images at the given strength.
 
-    Steps: load refs → per-image stats → consensus → fit a LookTransform → sample it on the
-    protected base → blend by strength → regularize. ``strength = 0`` returns the base exactly.
+    Steps: load refs → per-image stats → consensus → fit a LookTransform → sample on the protected
+    base → assemble for ``placement`` ("node2" replace, or "between" Node 1 & 2) → blend by strength.
     """
     fitter = fitter or MidFitter()
     base = load_base(size)
@@ -49,8 +66,7 @@ def render_cube(
     consensus = build_consensus([compute_stats(img) for img in images])
     look = fitter.fit(consensus)
 
-    look_samples = look(base)
-    final = regularize(blend(base, look_samples, strength), size)
+    final = _assemble(look(base), strength, placement, size)
     return Cube(size=size, samples=final, title=title)
 
 
@@ -91,11 +107,12 @@ def render_cube_dual(
     *,
     fitter: LookFitter | None = None,
     title: str | None = None,
+    placement: str = "node2",
     max_dim: int | None = 1024,
     size: int = DEFAULT_SIZE,
     sample_cap: int = 200_000,
 ) -> Cube:
-    """REPLACE Node 2 by transporting a NEUTRAL pool toward a GRADED pool (ADR-0016).
+    """Transport a NEUTRAL pool toward a GRADED pool (ADR-0016); ``placement`` node2/between (ADR-0017).
 
     `source_paths` = neutral images (your ungraded footage), `target_paths` = graded images (the
     look). Unpaired, any counts. The fitter (Mid/Rich, mkl/pdf) transports the source colour
@@ -115,7 +132,7 @@ def render_cube_dual(
         source_pixels = source_pixels[idx]
 
     look = fitter.fit(consensus, source_samples=source_pixels)
-    final = regularize(blend(base, look(base), strength), size)
+    final = _assemble(look(base), strength, placement, size)
     return Cube(size=size, samples=final, title=title)
 
 
@@ -126,17 +143,17 @@ def render_cube_from_pairs(
     *,
     smoothing: float = 0.8,
     title: str | None = None,
+    placement: str = "node2",
     max_dim: int | None = 1024,
     size: int = DEFAULT_SIZE,
 ) -> Cube:
-    """Build a cube that REPLACES Node 2 by learning the grade from before/after frame pairs
-    (ADR-0012). `before` = neutral (Node 1+2), `after` = graded; same frames. The learned grade is
-    applied to the protected base, then blended by strength. `strength = 0` returns the base."""
+    """Learn the grade from before/after frame pairs (ADR-0012); ``placement`` node2/between (ADR-0017).
+    `before` = neutral (Node 1+2), `after` = graded; same frames. `strength = 0` → base/identity."""
     from lutgen.fitter.pairs import PairsFitter
 
     base = load_base(size)
     befores = load_references(before_paths, max_dim=max_dim)
     afters = load_references(after_paths, max_dim=max_dim)
     look = PairsFitter(smoothing=smoothing, size=size).fit_from_pairs(befores, afters)
-    final = regularize(blend(base, look(base), strength), size)
+    final = _assemble(look(base), strength, placement, size)
     return Cube(size=size, samples=final, title=title)
