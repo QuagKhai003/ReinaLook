@@ -342,8 +342,8 @@ class MainWindow(QtWidgets.QMainWindow):
         (placement switch / still load) only re-assembles + re-applies the cached look to the still."""
         if self._thread is not None and self._thread.isRunning():
             return
-        if not refit and self._look_samples is None and self._dirty:
-            return                                # nothing cached + pending → wait for Compute
+        # refit=False (still load / placement switch) always renders: applies the cached look if
+        # any, else the base — so a freshly loaded still shows immediately, even before Compute.
         snap = self._snapshot(refit=refit)
         self._still_dirty = False
         self._compute_btn.setText("Computing…")

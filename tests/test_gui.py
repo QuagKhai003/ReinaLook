@@ -103,6 +103,21 @@ def test_placement_switch_refreshes_preview_without_dirty(app, tmp_path):
     w.close()
 
 
+def test_refresh_renders_still_even_with_refs_pending(app, tmp_path):
+    from lutgen.app.main_window import MainWindow
+
+    w = MainWindow()
+    w._refs = ["x.png"]            # refs added but not computed → look pending (dirty)
+    w._mark_dirty()
+    assert w._dirty and w._look_samples is None
+    w._still = np.random.default_rng(0).random((20, 30, 3))   # a freshly loaded still
+    w._still_dirty = True
+    w._refresh_preview()           # was a no-op before the fix (guard skipped it)
+    _drain(app, w)
+    assert w._before_lbl.pixmap() is not None and not w._before_lbl.pixmap().isNull()
+    w.close()
+
+
 def test_export_writes_valid_cube(app, tmp_path):
     from lutgen.app.main_window import MainWindow
     from lutgen.engine.cube_io import write_cube
