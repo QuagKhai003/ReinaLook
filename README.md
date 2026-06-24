@@ -121,6 +121,9 @@ reinalook-gui          # or:  python -m lutgen.app
 5. **Set the dials:**
    - **Tone** — lower keeps your footage's brightness; higher also matches the references' exposure.
    - **Strength** — how strong the look is (0 = your original, 1 = full look).
+   - **Adjustments** (optional panel) — push the look toward what you want, baked into the LUT:
+     **Contrast, Saturation, Temperature, Tint, Shadows, Highlights, Highlight roll-off**. These
+     work **with** references or **on their own** (a pure manual grade — no references needed).
 6. **(Optional) Load a preview still** to see the look on your own frame inside the app:
    - In Resolve, on any clip, keep **Node 1** (your → DWG/DI conversion) and **turn Node 2 OFF**.
    - Right-click the viewer → **Grab Still**, then right-click the still → **Export** as a PNG/JPG.
@@ -147,6 +150,12 @@ reinalook render --refs r1.png r2.png r3.png --fitter rich --method pdf --space 
 
 # Unpaired pools (your neutral footage + graded examples):
 reinalook render --source neutral1.png neutral2.png --refs graded1.png graded2.png --out look.cube
+
+# Manual grade — no references, just creative controls baked into the LUT:
+reinalook render --contrast 0.4 --saturation 0.5 --temperature 0.2 --rolloff 0.6 --out look.cube
+
+# References + adjustments together:
+reinalook render --refs r1.png r2.png --saturation 0.3 --contrast 0.2 --out look.cube
 ```
 
 ---

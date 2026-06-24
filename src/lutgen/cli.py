@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from lutgen.engine.adjust import Adjustments
 from lutgen.engine.cube_io import write_cube
 from lutgen.fitter.mid import MidFitter
 from lutgen.fitter.rich import RichFitter
@@ -47,6 +48,14 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="rich OT method: mkl (mean+cov) or pdf (Pitié IDT, full distribution)")
     r.add_argument("--placement", choices=["node2", "between"], default="node2",
                    help="node2: replace Node 2 (DWG/DI->Rec.709+look); between: DWG/DI look between Node 1&2")
+    # creative adjustments (baked on top of the look; all default 0 = off; refs optional)
+    r.add_argument("--contrast", type=float, default=0.0, help="-1 flat .. +1 punchy")
+    r.add_argument("--saturation", type=float, default=0.0, help="-1 grey .. +1 vivid")
+    r.add_argument("--temperature", type=float, default=0.0, help="-1 cool .. +1 warm")
+    r.add_argument("--tint", type=float, default=0.0, help="-1 green .. +1 magenta")
+    r.add_argument("--shadows", type=float, default=0.0, help="-1 crush .. +1 lift shadows")
+    r.add_argument("--highlights", type=float, default=0.0, help="-1 pull .. +1 lift highlights")
+    r.add_argument("--rolloff", type=float, default=0.0, help="0..1 filmic muted highlights")
     r.add_argument("--preset", default=None, help="load refs/strength/title from a preset JSON")
     r.add_argument("--save-preset", default=None, help="write the settings used to a preset JSON")
     r.add_argument("--max-dim", type=int, default=1024, help="downscale refs to this max side")
@@ -81,8 +90,14 @@ def _resolve(args):
 
 def _cmd_render(args: argparse.Namespace) -> int:
     refs, strength, title = _resolve(args)
-    if not refs:
-        print("error: no references (pass --refs or --preset)", file=sys.stderr)
+    adjust = Adjustments(
+        contrast=args.contrast, saturation=args.saturation, temperature=args.temperature,
+        tint=args.tint, shadows=args.shadows, highlights=args.highlights,
+        highlight_rolloff=args.rolloff,
+    )
+    if not refs and adjust.is_identity():
+        print("error: nothing to do — pass --refs, --preset, or some --contrast/--saturation/…",
+              file=sys.stderr)
         return 2
     kwargs = {} if args.tone is None else {"tone_strength": args.tone}
     if args.fitter == "rich":
@@ -91,12 +106,12 @@ def _cmd_render(args: argparse.Namespace) -> int:
     fitter = _FITTERS[args.fitter](**kwargs)
     if args.source:                       # unpaired neutral→graded transport (ADR-0016)
         cube = render_cube_dual(args.source, refs, strength, fitter=fitter, title=title,
-                                placement=args.placement, max_dim=args.max_dim)
+                                placement=args.placement, adjust=adjust, max_dim=args.max_dim)
         note = f"{len(args.source)} source + {len(refs)} target"
     else:
         cube = render_cube(refs, strength, title=title, fitter=fitter,
-                           placement=args.placement, max_dim=args.max_dim)
-        note = f"{len(refs)} refs"
+                           placement=args.placement, adjust=adjust, max_dim=args.max_dim)
+        note = f"{len(refs)} refs" if refs else "manual grade (no refs)"
     write_cube(args.out, cube.samples, cube.size, title=cube.title)
     if args.save_preset:
         save_preset(args.save_preset, refs, strength, title)
