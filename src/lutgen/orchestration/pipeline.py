@@ -112,7 +112,7 @@ def render_cube_from_pairs(
     after_paths,
     strength: float = 1.0,
     *,
-    smoothing: float = 0.8,
+    smoothing: float = 0.025,
     title: str | None = None,
     placement: str = "node2",
     max_dim: int | None = 1024,

@@ -34,7 +34,7 @@ def _resize_to(img: np.ndarray, hw: tuple[int, int]) -> np.ndarray:
 class PairsFitter:
     """Learn a grade LookTransform from before/after frame pairs (ADR-0012)."""
 
-    def __init__(self, smoothing: float = 0.8, min_weight: float = 1e-3, size: int = DEFAULT_SIZE):
+    def __init__(self, smoothing: float = 0.025, min_weight: float = 1e-3, size: int = DEFAULT_SIZE):
         self._smoothing = float(smoothing)
         self._min_weight = float(min_weight)
         self._size = size
