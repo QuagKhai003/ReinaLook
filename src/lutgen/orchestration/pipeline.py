@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from lutgen.engine.apply import apply_cube
 from lutgen.engine.base import DEFAULT_SIZE, load_base, load_base_inverse
 from lutgen.engine.cube_io import Cube
@@ -79,6 +81,41 @@ def render_look_cube(
     look = MidFitter(tone_strength=tone_strength).fit(consensus, source_samples=grid)
     look_samples = look(grid)
     final = regularize(blend(grid, look_samples, strength), size)
+    return Cube(size=size, samples=final, title=title)
+
+
+def render_cube_dual(
+    source_paths,
+    target_paths,
+    strength: float = 1.0,
+    *,
+    fitter: LookFitter | None = None,
+    title: str | None = None,
+    max_dim: int | None = 1024,
+    size: int = DEFAULT_SIZE,
+    sample_cap: int = 200_000,
+) -> Cube:
+    """REPLACE Node 2 by transporting a NEUTRAL pool toward a GRADED pool (ADR-0016).
+
+    `source_paths` = neutral images (your ungraded footage), `target_paths` = graded images (the
+    look). Unpaired, any counts. The fitter (Mid/Rich, mkl/pdf) transports the source colour
+    distribution onto the target's, calibrated on real neutral footage rather than a uniform source.
+    Learned transform is applied to the protected base, then blended. `strength = 0` returns the base.
+    """
+    fitter = fitter or MidFitter()
+    base = load_base(size)
+
+    targets = load_references(target_paths, max_dim=max_dim)
+    consensus = build_consensus([compute_stats(img) for img in targets])
+
+    sources = load_references(source_paths, max_dim=max_dim)
+    source_pixels = np.concatenate([img.reshape(-1, 3) for img in sources])
+    if source_pixels.shape[0] > sample_cap:
+        idx = np.random.default_rng(0).choice(source_pixels.shape[0], sample_cap, replace=False)
+        source_pixels = source_pixels[idx]
+
+    look = fitter.fit(consensus, source_samples=source_pixels)
+    final = regularize(blend(base, look(base), strength), size)
     return Cube(size=size, samples=final, title=title)
 
 

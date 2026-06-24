@@ -39,9 +39,9 @@ def test_mode_and_fitter_controls(app):
     w._fitter.setCurrentText("Rich"); w._method.setCurrentText("pdf"); app.processEvents()
     w._space.setCurrentText("rgb"); app.processEvents()
     np.testing.assert_array_equal(w._final_samples(), w._base)
-    # switch to pairs mode — page swaps, controls disable
+    # switch to Neutral+Graded pools — page swaps, fitter controls stay active
     w._mode.setCurrentIndex(1); app.processEvents()
-    assert w._is_pairs() and not w._fitter.isEnabled()
+    assert w._is_pairs() and w._fitter.isEnabled()
     assert w._final_samples().shape == (35937, 3)
 
 

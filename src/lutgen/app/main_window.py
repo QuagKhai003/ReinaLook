@@ -21,7 +21,6 @@ from lutgen.engine.cube_io import write_cube
 from lutgen.engine.regularize import regularize
 from lutgen.engine.strength import blend
 from lutgen.fitter.mid import MidFitter
-from lutgen.fitter.pairs import PairsFitter
 from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.consensus import build_consensus
 from lutgen.orchestration.ingest import load_references
@@ -66,7 +65,7 @@ class MainWindow(QtWidgets.QMainWindow):
     # — UI —
     def _build_ui(self) -> None:
         self._mode = QtWidgets.QComboBox()
-        self._mode.addItems(["References", "Before/After pairs"])
+        self._mode.addItems(["References (graded only)", "Neutral + Graded (unpaired)"])
         self._mode.currentIndexChanged.connect(self._on_mode)
 
         # references page
@@ -86,10 +85,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # pairs page
         self._before_list = _file_list()
         self._after_list = _file_list()
-        before_add = QtWidgets.QPushButton("+ Add BEFORE (neutral)…")
-        after_add = QtWidgets.QPushButton("+ Add AFTER (graded)…")
-        before_rm = QtWidgets.QPushButton("Remove selected BEFORE")
-        after_rm = QtWidgets.QPushButton("Remove selected AFTER")
+        before_add = QtWidgets.QPushButton("+ Add NEUTRAL (your footage)…")
+        after_add = QtWidgets.QPushButton("+ Add GRADED (the look)…")
+        before_rm = QtWidgets.QPushButton("Remove selected neutral")
+        after_rm = QtWidgets.QPushButton("Remove selected graded")
         before_add.clicked.connect(self._add_before)
         after_add.clicked.connect(self._add_after)
         before_rm.clicked.connect(lambda: self._remove(self._before, self._before_list))
@@ -97,16 +96,17 @@ class MainWindow(QtWidgets.QMainWindow):
         pairs_page = QtWidgets.QWidget()
         pl = QtWidgets.QVBoxLayout(pairs_page)
         pl.setContentsMargins(0, 0, 0, 0)
-        pl.addWidget(QtWidgets.QLabel("BEFORE frames (Node 1+2, no grade)"))
+        pl.addWidget(QtWidgets.QLabel("NEUTRAL images (your ungraded footage)"))
         pl.addWidget(self._before_list)
         pl.addWidget(before_add)
         pl.addWidget(before_rm)
-        pl.addWidget(QtWidgets.QLabel("AFTER frames (same frames, graded)"))
+        pl.addWidget(QtWidgets.QLabel("GRADED images (the target look)"))
         pl.addWidget(self._after_list)
         pl.addWidget(after_add)
         pl.addWidget(after_rm)
-        hint = QtWidgets.QLabel("Pairs learns your EXACT grade — Fitter/Method/Space/Tone don't "
-                                "apply here; only Strength does. BEFORE and AFTER must match 1:1.")
+        hint = QtWidgets.QLabel("Unpaired pools — different scenes/lighting OK, counts need not "
+                                "match. Transports your neutral colors toward the graded look. "
+                                "Fitter/Method/Space/Tone all apply.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         pl.addWidget(hint)
@@ -193,12 +193,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _refit(self) -> None:
         try:
-            if self._is_pairs():
-                if not self._before or len(self._before) != len(self._after):
+            if self._is_pairs():           # unpaired Neutral + Graded pools (ADR-0016)
+                if not self._before or not self._after:
                     self._look_samples = None
                     return
-                look = PairsFitter().fit_from_pairs(
-                    load_references(self._before), load_references(self._after))
+                targets = load_references(self._after)
+                consensus = build_consensus([compute_stats(i) for i in targets])
+                src = np.concatenate([i.reshape(-1, 3) for i in load_references(self._before)])
+                if src.shape[0] > 200_000:
+                    src = src[np.random.default_rng(0).choice(src.shape[0], 200_000, replace=False)]
+                look = self._build_fitter().fit(consensus, source_samples=src)
             else:
                 if not self._refs:
                     self._look_samples = None
@@ -222,13 +226,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 _PREVIEW_W, QtCore.Qt.TransformationMode.SmoothTransformation))
 
     def _sync_controls(self) -> None:
-        pairs = self._is_pairs()
+        # both modes use the OT fitters, so fitter controls are always active.
         rich = self._fitter.currentText() == "Rich"
-        self._pages.setCurrentIndex(1 if pairs else 0)
-        for w in (self._fitter, self._tone):
-            w.setEnabled(not pairs)
-        self._method.setEnabled(not pairs and rich)
-        self._space.setEnabled(not pairs and rich)
+        self._pages.setCurrentIndex(1 if self._is_pairs() else 0)
+        self._method.setEnabled(rich)
+        self._space.setEnabled(rich)
 
     # — slots —
     def _on_mode(self, _=None) -> None:
@@ -278,8 +280,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _export(self) -> None:
         if self._look_samples is None:
             if self._is_pairs():
-                msg = (f"Add matching BEFORE/AFTER frames first — now {len(self._before)} before, "
-                       f"{len(self._after)} after (counts must be equal and non-empty).")
+                msg = (f"Add NEUTRAL and GRADED images first — now {len(self._before)} neutral, "
+                       f"{len(self._after)} graded (need at least one of each).")
             else:
                 msg = "Add reference images first."
             QtWidgets.QMessageBox.warning(self, "LookForge", msg)
