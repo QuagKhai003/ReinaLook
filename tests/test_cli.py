@@ -56,23 +56,13 @@ def test_save_then_use_preset(tmp_path):
     np.testing.assert_array_equal(read_cube(out1).samples, read_cube(out2).samples)
 
 
-def test_render_look_writes_valid_cube(tmp_path):
-    a, b = _two_refs(tmp_path)
-    out = tmp_path / "look.cube"
-    rc = main(["render-look", "--refs", a, b, "--strength", "1.0", "--tone", "0", "--out", str(out)])
-    assert rc == 0
-    cube = read_cube(out)
-    assert cube.size == 33
-    assert cube.samples.min() >= 0.0 and cube.samples.max() <= 1.0
-
-
-def test_render_look_strength_zero_is_identity(tmp_path):
+def test_render_between_placement(tmp_path):
     from lutgen.engine.grid import identity_grid
 
     a, b = _two_refs(tmp_path)
-    out = tmp_path / "id.cube"
-    assert main(["render-look", "--refs", a, b, "--strength", "0", "--out", str(out)]) == 0
-    np.testing.assert_allclose(read_cube(out).samples, identity_grid(), atol=1e-6)
+    out = tmp_path / "between.cube"
+    assert main(["render", "--refs", a, b, "--placement", "between", "--strength", "0", "--out", str(out)]) == 0
+    np.testing.assert_allclose(read_cube(out).samples, identity_grid(), atol=1e-6)  # s0 → pass-through
 
 
 def test_no_refs_errors(tmp_path):
