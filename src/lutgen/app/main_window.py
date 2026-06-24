@@ -88,17 +88,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self._after_list = _file_list()
         before_add = QtWidgets.QPushButton("+ Add BEFORE (neutral)…")
         after_add = QtWidgets.QPushButton("+ Add AFTER (graded)…")
+        before_rm = QtWidgets.QPushButton("Remove selected BEFORE")
+        after_rm = QtWidgets.QPushButton("Remove selected AFTER")
         before_add.clicked.connect(self._add_before)
         after_add.clicked.connect(self._add_after)
+        before_rm.clicked.connect(lambda: self._remove(self._before, self._before_list))
+        after_rm.clicked.connect(lambda: self._remove(self._after, self._after_list))
         pairs_page = QtWidgets.QWidget()
         pl = QtWidgets.QVBoxLayout(pairs_page)
         pl.setContentsMargins(0, 0, 0, 0)
         pl.addWidget(QtWidgets.QLabel("BEFORE frames (Node 1+2, no grade)"))
         pl.addWidget(self._before_list)
         pl.addWidget(before_add)
+        pl.addWidget(before_rm)
         pl.addWidget(QtWidgets.QLabel("AFTER frames (same frames, graded)"))
         pl.addWidget(self._after_list)
         pl.addWidget(after_add)
+        pl.addWidget(after_rm)
+        hint = QtWidgets.QLabel("Pairs learns your EXACT grade — Fitter/Method/Space/Tone don't "
+                                "apply here; only Strength does. BEFORE and AFTER must match 1:1.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray;")
+        pl.addWidget(hint)
 
         self._pages = QtWidgets.QStackedWidget()
         self._pages.addWidget(refs_page)
@@ -231,36 +242,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self._strength_lbl.setText(f"Strength: {self._strength_value():.2f}")
         self._update_preview()
 
-    def _pick(self, title):
+    def _add(self, title, store, listw) -> None:
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, title, "", _IMG_FILTER)
-        return paths
+        new = [p for p in paths if p not in store]   # dedup: skip already-added files
+        if new:
+            store.extend(new)
+            listw.addItems(new)
+            self._refit(); self._update_preview()
 
     def _add_refs(self) -> None:
-        p = self._pick("Add references")
-        if p:
-            self._refs += p
-            self._refs_list.addItems(p)
-            self._refit(); self._update_preview()
-
-    def _remove_refs(self) -> None:
-        for item in self._refs_list.selectedItems():
-            self._refs.remove(item.text())
-            self._refs_list.takeItem(self._refs_list.row(item))
-        self._refit(); self._update_preview()
+        self._add("Add references", self._refs, self._refs_list)
 
     def _add_before(self) -> None:
-        p = self._pick("Add BEFORE (neutral) frames")
-        if p:
-            self._before += p
-            self._before_list.addItems(p)
-            self._refit(); self._update_preview()
+        self._add("Add BEFORE (neutral) frames", self._before, self._before_list)
 
     def _add_after(self) -> None:
-        p = self._pick("Add AFTER (graded) frames")
-        if p:
-            self._after += p
-            self._after_list.addItems(p)
-            self._refit(); self._update_preview()
+        self._add("Add AFTER (graded) frames", self._after, self._after_list)
+
+    def _remove(self, store, listw) -> None:
+        for item in listw.selectedItems():
+            if item.text() in store:
+                store.remove(item.text())
+            listw.takeItem(listw.row(item))
+        self._refit(); self._update_preview()
+
+    def _remove_refs(self) -> None:
+        self._remove(self._refs, self._refs_list)
 
     def _load_still(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load DWG/DI preview still", "", _IMG_FILTER)
@@ -270,7 +277,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _export(self) -> None:
         if self._look_samples is None:
-            QtWidgets.QMessageBox.warning(self, "LookForge", "Add references (or before/after pairs) first.")
+            if self._is_pairs():
+                msg = (f"Add matching BEFORE/AFTER frames first — now {len(self._before)} before, "
+                       f"{len(self._after)} after (counts must be equal and non-empty).")
+            else:
+                msg = "Add reference images first."
+            QtWidgets.QMessageBox.warning(self, "LookForge", msg)
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export .cube", "look.cube", "Cube (*.cube)")
         if path:
