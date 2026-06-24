@@ -23,6 +23,8 @@ QUANTILES = np.linspace(0.0, 1.0, 11)
 LUMA_WEIGHTS = np.array([0.2126, 0.7152, 0.0722])
 # Luma band edges (shadow / mid / highlight).
 BAND_EDGES = (1.0 / 3.0, 2.0 / 3.0)
+# Per-image Oklab subsample size for PDF transfer (ADR-0013).
+SAMPLE_CAP = 2000
 
 
 @dataclass
@@ -39,6 +41,7 @@ class ImageStats:
     covariance: np.ndarray          # (3, 3) RGB covariance (palette, for OT)
     mean_oklab: np.ndarray          # (3,) Oklab mean (perceptual OT, ADR-0011)
     cov_oklab: np.ndarray           # (3, 3) Oklab covariance
+    oklab_samples: np.ndarray       # (k, 3) Oklab pixel subsample (PDF transfer target, ADR-0013)
 
 
 def _saturation(pixels: np.ndarray) -> np.ndarray:
@@ -89,4 +92,13 @@ def compute_stats(image: np.ndarray) -> ImageStats:
         covariance=np.cov(pixels, rowvar=False) if pixels.shape[0] > 1 else np.zeros((3, 3)),
         mean_oklab=lab.mean(axis=0),
         cov_oklab=np.cov(lab, rowvar=False) if pixels.shape[0] > 1 else np.zeros((3, 3)),
+        oklab_samples=_subsample(lab, SAMPLE_CAP),
     )
+
+
+def _subsample(x: np.ndarray, cap: int) -> np.ndarray:
+    """Deterministic random subsample of rows (for PDF-transfer targets)."""
+    if x.shape[0] <= cap:
+        return x.copy()
+    idx = np.random.default_rng(0).choice(x.shape[0], cap, replace=False)
+    return x[idx]

@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from lutgen.engine.base import load_base
+from lutgen.engine.base import DEFAULT_SIZE, load_base
 from lutgen.engine.perceptual import from_oklab, to_oklab
 from lutgen.orchestration.consensus import ConsensusLook
 from lutgen.orchestration.stats import LUMA_WEIGHTS
 
+from ._gradecube import CubeLookTransform, learn_grade_cube
 from .interface import LookTransform
 
 _EPS = 1e-5  # regularize covariances for invertible / well-conditioned roots
@@ -42,6 +43,28 @@ def _mkl_matrix(cov_s: np.ndarray, cov_t: np.ndarray) -> np.ndarray:
     s_ihalf = _psd_pow(cov_s, -0.5)
     middle = _psd_pow(s_half @ cov_t @ s_half, 0.5)
     return s_ihalf @ middle @ s_ihalf
+
+
+def _cdf_match_1d(s: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """Map values ``s`` onto the 1D distribution of ``t`` (rank → target quantile)."""
+    ranks = np.empty(s.shape[0])
+    ranks[np.argsort(s)] = np.linspace(0.0, 1.0, s.shape[0])
+    return np.interp(ranks, np.linspace(0.0, 1.0, t.shape[0]), np.sort(t))
+
+
+def _idt(source: np.ndarray, target: np.ndarray, iterations: int, seed: int = 0) -> np.ndarray:
+    """Pitié Iterated Distribution Transfer: transport ``source`` onto ``target``'s full
+    distribution via random rotations + per-axis 1D CDF matching."""
+    rng = np.random.default_rng(seed)
+    s = source.copy()
+    for _ in range(iterations):
+        rot, _ = np.linalg.qr(rng.standard_normal((3, 3)))  # random orthonormal basis
+        sr = s @ rot
+        tr = target @ rot
+        for ax in range(3):
+            sr[:, ax] = _cdf_match_1d(sr[:, ax], tr[:, ax])
+        s = sr @ rot.T
+    return s
 
 
 class _RichLookTransform:
@@ -71,26 +94,48 @@ class _RichLookTransform:
 
 
 class RichFitter:
-    """Optimal-transport Look Fitter (ADR-0010/0011). `fit(consensus) -> LookTransform`.
+    """Optimal-transport Look Fitter (ADR-0010/0011/0013). `fit(consensus) -> LookTransform`.
 
-    ``space`` = "oklab" (default, perceptual) or "rgb". ``tone_strength`` (0..1, default 1.0)
-    preserves input lightness while keeping the transported palette (lower = keep brightness)."""
+    ``method`` = "mkl" (closed-form, mean+covariance) or "pdf" (Pitié IDT, full distribution).
+    ``space`` = "oklab" (default, perceptual) or "rgb". ``tone_strength`` (0..1) preserves input
+    lightness while keeping the transported palette (lower = keep brightness)."""
 
-    def __init__(self, tone_strength: float = 1.0, space: str = "oklab"):
+    def __init__(self, tone_strength: float = 1.0, space: str = "oklab", method: str = "mkl",
+                 iterations: int = 16, smoothing: float = 0.8, size: int = DEFAULT_SIZE):
         self._tone = float(np.clip(tone_strength, 0.0, 1.0))
         if space not in ("oklab", "rgb"):
             raise ValueError(f"space must be 'oklab' or 'rgb', got {space!r}")
+        if method not in ("mkl", "pdf"):
+            raise ValueError(f"method must be 'mkl' or 'pdf', got {method!r}")
         self._space = space
+        self._method = method
+        self._iters = int(iterations)
+        self._smoothing = float(smoothing)
+        self._size = size
 
     def fit(self, consensus: ConsensusLook, source_samples=None) -> LookTransform:
         src = load_base() if source_samples is None else np.asarray(source_samples, dtype=np.float64)
         src = src.reshape(-1, 3)
+        if self._method == "pdf":
+            return self._fit_pdf(consensus, src)
+
         if self._space == "oklab":
-            src = to_oklab(src)
+            x = to_oklab(src)
             mu_t, cov_t = consensus.mean_oklab, consensus.cov_oklab
         else:
+            x = src
             mu_t, cov_t = consensus.mean, consensus.covariance
-        mu_s = src.mean(axis=0)
-        cov_s = np.cov(src, rowvar=False) + _EPS * np.eye(3)
+        mu_s = x.mean(axis=0)
+        cov_s = np.cov(x, rowvar=False) + _EPS * np.eye(3)
         matrix = _mkl_matrix(cov_s, _sym(cov_t) + _EPS * np.eye(3))
         return _RichLookTransform(mu_s, matrix, mu_t, self._tone, space=self._space)
+
+    def _fit_pdf(self, consensus: ConsensusLook, src: np.ndarray) -> LookTransform:
+        # Pitié IDT in Oklab, then fit a smooth continuous grade cube from source -> transported.
+        src_lab = to_oklab(src)
+        looked_lab = _idt(src_lab, consensus.samples_oklab, self._iters)
+        if self._tone < 1.0:
+            looked_lab[:, 0] = src_lab[:, 0] + self._tone * (looked_lab[:, 0] - src_lab[:, 0])
+        looked_rgb = from_oklab(looked_lab)
+        grade = learn_grade_cube(src, looked_rgb, self._size, self._smoothing, 1e-3)
+        return CubeLookTransform(grade, self._size)

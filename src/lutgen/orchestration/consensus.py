@@ -33,6 +33,7 @@ class ConsensusLook:
     covariance: np.ndarray          # (3, 3) target RGB covariance (palette, OT)
     mean_oklab: np.ndarray          # (3,) target Oklab mean (perceptual OT, ADR-0011)
     cov_oklab: np.ndarray           # (3, 3) target Oklab covariance
+    samples_oklab: np.ndarray       # (M, 3) pooled Oklab samples (PDF transfer target, ADR-0013)
     confidence: dict                # per-trait weight in [0,1] from cross-ref variance
     n_refs: int
 
@@ -61,6 +62,7 @@ def build_consensus(stats: list[ImageStats]) -> ConsensusLook:
     means_ok = np.stack([s.mean_oklab for s in stats], axis=0)
     covs_ok = np.stack([s.cov_oklab for s in stats], axis=0).mean(axis=0)
     covs_ok = 0.5 * (covs_ok + covs_ok.T)
+    samples_ok = np.concatenate([s.oklab_samples for s in stats], axis=0)
 
     confidence = {
         "tone": _confidence(cq),
@@ -80,6 +82,7 @@ def build_consensus(stats: list[ImageStats]) -> ConsensusLook:
         covariance=cov_agg,
         mean_oklab=np.median(means_ok, axis=0),
         cov_oklab=covs_ok,
+        samples_oklab=samples_ok,
         confidence=confidence,
         n_refs=len(stats),
     )
