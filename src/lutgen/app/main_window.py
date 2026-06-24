@@ -146,7 +146,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._method = QtWidgets.QComboBox(); self._method.addItems(["mkl", "pdf"])
         self._space = QtWidgets.QComboBox(); self._space.addItems(["oklab", "rgb"])
         self._placement = QtWidgets.QComboBox()
-        self._placement.addItems(["Replace Node 2", "Between Node 1 & 2"])
+        self._placement.addItems(["Replace CSTout", "Between CSTs"])
         for c in (self._fitter, self._method, self._space):
             c.currentIndexChanged.connect(self._on_fitter_changed)
         self._placement.currentIndexChanged.connect(self._on_placement)
