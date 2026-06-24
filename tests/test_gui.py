@@ -34,7 +34,7 @@ def test_window_builds_and_previews(app):
     from lutgen.app.main_window import MainWindow
 
     w = MainWindow()
-    assert w.windowTitle() == "LookForge"
+    assert w.windowTitle() == "ReinaLook"
     np.testing.assert_array_equal(w._final_samples(), w._base)  # no refs → base
     w._on_strength(50)   # must not raise (debounced)
     _drain(app, w)
