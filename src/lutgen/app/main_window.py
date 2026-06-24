@@ -337,12 +337,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._dirty = True
         self._compute_btn.setText("Compute preview ●")   # ● = changes pending
 
-    def _launch_compute(self, _=None) -> None:
+    def _launch_compute(self, _=None, *, refit: bool = True) -> None:
+        """Compute on a worker thread. ``refit`` True (Compute button) rebuilds the look; False
+        (placement switch / still load) only re-assembles + re-applies the cached look to the still."""
         if self._thread is not None and self._thread.isRunning():
             return
-        snap = self._snapshot(refit=True)         # the button always rebuilds the look
+        if not refit and self._look_samples is None and self._dirty:
+            return                                # nothing cached + pending → wait for Compute
+        snap = self._snapshot(refit=refit)
         self._still_dirty = False
-        self._dirty = False
         self._compute_btn.setText("Computing…")
         self._set_controls_enabled(False)         # gray everything out
         self._set_busy(True)
@@ -351,15 +354,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self._thread.done.connect(self._on_computed)
         self._thread.start()
 
+    def _refresh_preview(self) -> None:
+        """Re-render the preview for a preview-only change (placement, still) — no look rebuild."""
+        self._launch_compute(refit=False)
+
     def _on_computed(self, result) -> None:
         self._set_busy(False)
         self._set_controls_enabled(True)
-        self._compute_btn.setText("Compute preview")
         if isinstance(result, Exception):
+            self._compute_btn.setText("Compute preview ●" if self._dirty else "Compute preview")
             QtWidgets.QMessageBox.warning(self, "LookForge", f"Could not build look:\n{result}")
             return
-        look, before, after, _was_refit = result
+        look, before, after, was_refit = result
         self._look_samples = look
+        if was_refit:
+            self._dirty = False                   # look is now current
+        self._compute_btn.setText("Compute preview ●" if self._dirty else "Compute preview")
         if before is not None:
             self._before_img = before
         self._show(self._before_lbl, self._before_img)
@@ -387,7 +397,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_controls(); self._mark_dirty()
 
     def _on_placement(self, _=None) -> None:
-        self._mark_dirty()
+        # placement is preview-only (cached look); refresh now unless the look itself is stale.
+        if self._look_samples is not None and not self._dirty:
+            self._refresh_preview()
+        else:
+            self._mark_dirty()
 
     def _on_tone(self, _=None) -> None:
         self._tone_lbl.setText(f"Tone (exposure match): {self._tone_value():.2f}")
@@ -428,8 +442,8 @@ class MainWindow(QtWidgets.QMainWindow):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load DWG/DI preview still", "", _IMG_FILTER)
         if path:
             self._still = load_preview_still(path)   # full resolution (see preview.load_preview_still)
-            self._still_dirty = True                 # "before" recomputed on next Compute
-            self._mark_dirty()
+            self._still_dirty = True                 # "before" recomputed now
+            self._refresh_preview()                  # show the loaded still immediately
 
     def _export(self) -> None:
         if self._look_samples is None and self._has_inputs():
