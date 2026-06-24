@@ -81,10 +81,10 @@ Resolve pipeline** — that you can tune, clone, and trust shot to shot.
 
 ## ⬇️ Install (Windows, one line)
 
-Open **PowerShell** and paste:
+Open **PowerShell** and paste this one line:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/QuagKhai003/ReinaLook/main/install.ps1 | iex"
+irm https://raw.githubusercontent.com/QuagKhai003/ReinaLook/main/install.ps1 | iex
 ```
 
 That single command will:
@@ -165,7 +165,7 @@ reinalook render-pairs --before n1.png n2.png --after g1.png g2.png --out my_gra
 One line in PowerShell removes **everything** ReinaLook installed (app, shortcuts, cache):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/QuagKhai003/ReinaLook/main/uninstall.ps1 | iex"
+irm https://raw.githubusercontent.com/QuagKhai003/ReinaLook/main/uninstall.ps1 | iex
 ```
 
 This deletes:
