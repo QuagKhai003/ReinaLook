@@ -31,7 +31,7 @@ def test_render_writes_valid_cube(tmp_path):
     rc = main(["render", "--refs", a, b, "--strength", "1.0", "--out", str(out), "--title", "T"])
     assert rc == 0
     cube = read_cube(out)
-    assert cube.size == 33 and cube.title == "T"
+    assert cube.size == 65 and cube.title == "T"
     assert cube.samples.min() >= 0.0 and cube.samples.max() <= 1.0
 
 

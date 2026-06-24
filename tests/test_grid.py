@@ -15,8 +15,8 @@ from lutgen.engine.grid import (
 
 def test_shape_and_count():
     g = identity_grid()
-    assert DEFAULT_SIZE == 33
-    assert g.shape == (33 ** 3, 3) == (35937, 3)
+    assert DEFAULT_SIZE == 65
+    assert g.shape == (65 ** 3, 3) == (274625, 3)
     assert g.dtype == np.float64
 
 
@@ -45,7 +45,7 @@ def test_red_fastest_ordering():
 def test_reshape_flatten_round_trip():
     g = identity_grid()
     lat = reshape_to_lattice(g)
-    assert lat.shape == (33, 33, 33, 3)
+    assert lat.shape == (65, 65, 65, 3)
     np.testing.assert_array_equal(flatten_lattice(lat), g)
 
 

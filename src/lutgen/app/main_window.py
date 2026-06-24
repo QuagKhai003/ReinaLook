@@ -17,7 +17,7 @@ import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from lutgen.engine.apply import apply_cube
-from lutgen.engine.base import load_base
+from lutgen.engine.base import DEFAULT_SIZE, load_base
 from lutgen.engine.cube_io import write_cube
 from lutgen.engine.regularize import regularize
 from lutgen.engine.strength import blend
@@ -283,7 +283,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _final_samples(self) -> np.ndarray:
         if self._look_samples is None:
             return self._base
-        return _assemble(self._look_samples, self._strength_value(), self._placement_key(), 33)
+        return _assemble(self._look_samples, self._strength_value(), self._placement_key(), DEFAULT_SIZE)
 
     def _snapshot(self, refit: bool) -> dict:
         return dict(
@@ -300,7 +300,7 @@ class MainWindow(QtWidgets.QMainWindow):
         report(1)
         look = self._build_look(snap, report) if snap["refit"] else snap["look"]
         report(66)
-        final = self._base if look is None else _assemble(look, snap["strength"], snap["placement"], 33)
+        final = self._base if look is None else _assemble(look, snap["strength"], snap["placement"], DEFAULT_SIZE)
         report(70)
         before = None
         if snap["still_dirty"]:
