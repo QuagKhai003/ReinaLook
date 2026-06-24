@@ -68,9 +68,13 @@ def learn_grade_cube(before: np.ndarray, after: np.ndarray, size: int,
     if empty.any():                            # extrapolate the grade to unsampled colors
         node[empty] = NearestNDInterpolator(grid[sampled], node[sampled])(grid[empty])
 
-    if smoothing > 0:                          # regularize: smooth in the 3D color volume
+    if smoothing > 0:                          # regularize: smooth in the 3D color volume.
+        # sigma is in node units → scale with size so the smoothing covers the SAME colour distance
+        # at any cube resolution (a 33-tuned 0.8 → ~1.57 at 65; without this, 65 smooths half as
+        # much and bands/harshens more than 33 did).
+        sigma = smoothing * (n / 33.0)
         lat = node.reshape(n, n, n, 3)
         for c in range(3):
-            lat[..., c] = gaussian_filter(lat[..., c], sigma=smoothing, mode="nearest")
+            lat[..., c] = gaussian_filter(lat[..., c], sigma=sigma, mode="nearest")
         node = lat.reshape(-1, 3)
     return np.clip(node, 0.0, 1.0)
