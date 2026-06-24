@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-DEFAULT_SIZE = 33
+DEFAULT_SIZE = 65
 
 
 @dataclass

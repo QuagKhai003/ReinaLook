@@ -12,7 +12,7 @@ from lutgen.engine.spaces import di_decode, dwg_to_rec709_linear, rec709_g24_enc
 def test_shape_preserved_on_full_grid():
     g = identity_grid()
     out = convert_base(g)
-    assert out.shape == g.shape == (35937, 3)
+    assert out.shape == g.shape == (274625, 3)
     assert out.dtype == np.float64
     assert np.isfinite(out).all()
 

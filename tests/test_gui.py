@@ -51,7 +51,7 @@ def test_mode_and_fitter_controls(app):
     np.testing.assert_array_equal(w._final_samples(), w._base)   # no refs → base
     w._mode.setCurrentIndex(1); _drain(app, w)                   # Neutral+Graded pools
     assert w._is_pairs() and w._fitter.isEnabled()
-    assert w._final_samples().shape == (35937, 3)
+    assert w._final_samples().shape == (274625, 3)
     w.close()
 
 
@@ -74,7 +74,7 @@ def test_threaded_compute_builds_look(app, tmp_path):
     assert not w._fitter.isEnabled()          # controls disabled during compute
     _drain(app, w)
     assert w._fitter.isEnabled()              # re-enabled when done
-    assert w._look_samples is not None and w._look_samples.shape == (35937, 3)
+    assert w._look_samples is not None and w._look_samples.shape == (274625, 3)
     w.close()
 
 
@@ -110,4 +110,4 @@ def test_export_writes_valid_cube(app, tmp_path):
     w = MainWindow()
     out = tmp_path / "gui.cube"
     write_cube(out, w._final_samples(), title="LookForge")  # same path the Export button uses
-    assert read_cube(out).size == 33
+    assert read_cube(out).size == 65
