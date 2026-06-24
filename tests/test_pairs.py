@@ -25,7 +25,7 @@ def _pair(seed, shape=(200, 200, 3)):
 
 def test_recovers_known_grade():
     before, after = _pair(0)
-    look = PairsFitter(smoothing=0.5).fit_from_pairs([before], [after])
+    look = PairsFitter(smoothing=0.02).fit_from_pairs([before], [after])
     test = np.random.default_rng(9).random((2000, 3))
     out = look(test)
     err = np.abs(out - _grade(test))
@@ -34,7 +34,7 @@ def test_recovers_known_grade():
 
 def test_identity_grade():
     before = np.random.default_rng(1).random((150, 150, 3))
-    look = PairsFitter(smoothing=0.5).fit_from_pairs([before], [before])  # after == before
+    look = PairsFitter(smoothing=0.02).fit_from_pairs([before], [before])  # after == before
     test = np.random.default_rng(2).random((1000, 3))
     np.testing.assert_allclose(look(test), test, atol=0.04)
 
@@ -69,3 +69,4 @@ def test_render_from_pairs_end_to_end(tmp_path):
     cube = render_cube_from_pairs([bp], [ap], 1.0)
     assert cube.samples.min() >= 0.0 and cube.samples.max() <= 1.0
     np.testing.assert_array_equal(render_cube_from_pairs([bp], [ap], 0.0).samples, base)  # s0==base
+

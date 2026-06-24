@@ -4,7 +4,8 @@
           (ADR-0013, fit a continuous cube from IDT-transported points). Trilinear splat into the
           grid, normalize, nearest-fill unsampled colors, Gaussian-smooth (OT regularization).
 @done     learn_grade_cube(before, after, size, smoothing, min_weight).
-@limits   PURE numeric. Inputs (...,3) [0,1]; output flat (size**3, 3) red-fastest.
+@limits   PURE numeric. Inputs (...,3) [0,1]; output flat (size**3, 3) red-fastest. `smoothing`
+          is a fraction of the [0,1] colour range (size-independent), not node units.
 @affects  Used by fitter/pairs.py + fitter/rich.py. See ADR-0012/0013.
 """
 
@@ -69,12 +70,13 @@ def learn_grade_cube(before: np.ndarray, after: np.ndarray, size: int,
         node[empty] = NearestNDInterpolator(grid[sampled], node[sampled])(grid[empty])
 
     if smoothing > 0:                          # regularize: smooth in the 3D color volume.
-        # sigma is in node units → scale with size so the smoothing covers the SAME colour distance
-        # at any cube resolution (a 33-tuned 0.8 → ~1.57 at 65; without this, 65 smooths half as
-        # much and bands/harshens more than 33 did).
-        sigma = smoothing * (n / 33.0)
+        # `smoothing` is a span of the [0,1] colour range; convert to node units for THIS cube.
+        # gaussian_filter sigma is in nodes, so a fixed sigma would smooth different colour amounts
+        # at different cube sizes; scaling by (n-1) keeps the smoothing the same colour width at any
+        # resolution (so 65-point smooths the same as 33 did — no extra banding).
+        sigma_nodes = smoothing * (n - 1)
         lat = node.reshape(n, n, n, 3)
         for c in range(3):
-            lat[..., c] = gaussian_filter(lat[..., c], sigma=sigma, mode="nearest")
+            lat[..., c] = gaussian_filter(lat[..., c], sigma=sigma_nodes, mode="nearest")
         node = lat.reshape(-1, 3)
     return np.clip(node, 0.0, 1.0)

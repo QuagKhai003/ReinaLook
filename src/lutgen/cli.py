@@ -58,7 +58,8 @@ def _build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--before", nargs="+", required=True, help="neutral frames (Node 1+2, no grade)")
     rp.add_argument("--after", nargs="+", required=True, help="graded frames (same frames, final look)")
     rp.add_argument("--strength", type=float, default=1.0, help="look strength 0..1 (default 1.0)")
-    rp.add_argument("--smoothing", type=float, default=0.8, help="grade smoothing sigma (default 0.8)")
+    rp.add_argument("--smoothing", type=float, default=0.025,
+                    help="grade smoothing as a fraction of the colour range (default 0.025)")
     rp.add_argument("--placement", choices=["node2", "between"], default="node2",
                     help="node2: replace Node 2; between: DWG/DI look between Node 1&2")
     rp.add_argument("--out", "-o", required=True, help="output .cube path")

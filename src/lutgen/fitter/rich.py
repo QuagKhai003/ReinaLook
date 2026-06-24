@@ -101,7 +101,7 @@ class RichFitter:
     lightness while keeping the transported palette (lower = keep brightness)."""
 
     def __init__(self, tone_strength: float = 1.0, space: str = "oklab", method: str = "mkl",
-                 iterations: int = 16, smoothing: float = 0.8, size: int = DEFAULT_SIZE):
+                 iterations: int = 16, smoothing: float = 0.025, size: int = DEFAULT_SIZE):
         self._tone = float(np.clip(tone_strength, 0.0, 1.0))
         if space not in ("oklab", "rgb"):
             raise ValueError(f"space must be 'oklab' or 'rgb', got {space!r}")
