@@ -37,6 +37,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="tonal/exposure match 0..1 (lower preserves your footage brightness)")
     r.add_argument("--space", choices=["oklab", "rgb"], default="oklab",
                    help="rich transport space (default oklab, perceptual)")
+    r.add_argument("--method", choices=["mkl", "pdf"], default="mkl",
+                   help="rich OT method: mkl (mean+cov) or pdf (Pitié IDT, full distribution)")
     r.add_argument("--preset", default=None, help="load refs/strength/title from a preset JSON")
     r.add_argument("--save-preset", default=None, help="write the settings used to a preset JSON")
     r.add_argument("--max-dim", type=int, default=1024, help="downscale refs to this max side")
@@ -87,6 +89,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
     kwargs = {} if args.tone is None else {"tone_strength": args.tone}
     if args.fitter == "rich":
         kwargs["space"] = args.space
+        kwargs["method"] = args.method
     fitter = _FITTERS[args.fitter](**kwargs)
     cube = render_cube(refs, strength, title=title, fitter=fitter, max_dim=args.max_dim)
     write_cube(args.out, cube.samples, cube.size, title=cube.title)
