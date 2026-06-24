@@ -15,72 +15,11 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.interpolate import NearestNDInterpolator
-from scipy.ndimage import gaussian_filter
 
-from lutgen.engine.apply import apply_cube
-from lutgen.engine.grid import DEFAULT_SIZE, identity_grid
+from lutgen.engine.grid import DEFAULT_SIZE
 
+from ._gradecube import CubeLookTransform, learn_grade_cube
 from .interface import LookTransform
-
-
-def _learn_grade_cube(before: np.ndarray, after: np.ndarray, size: int,
-                      smoothing: float, min_weight: float) -> np.ndarray:
-    """Build a (size**3, 3) grade cube mapping `before` colors to `after` colors (red-fastest)."""
-    n = size
-    b = np.clip(before.reshape(-1, 3), 0.0, 1.0)
-    a = after.reshape(-1, 3)
-    coords = b * (n - 1)                       # (M,3) in (R,G,B) grid coordinates
-    lo = np.floor(coords).astype(np.intp)
-    hi = np.minimum(lo + 1, n - 1)
-    frac = coords - lo
-
-    nn = n * n
-    acc = np.zeros((n ** 3, 3))
-    wsum = np.zeros(n ** 3)
-    for dr in (0, 1):
-        ir = hi[:, 0] if dr else lo[:, 0]
-        wr = frac[:, 0] if dr else 1.0 - frac[:, 0]
-        for dg in (0, 1):
-            ig = hi[:, 1] if dg else lo[:, 1]
-            wg = frac[:, 1] if dg else 1.0 - frac[:, 1]
-            for db in (0, 1):
-                ib = hi[:, 2] if db else lo[:, 2]
-                wb = frac[:, 2] if db else 1.0 - frac[:, 2]
-                w = wr * wg * wb
-                flat = ib * nn + ig * n + ir   # red-fastest flat index, lattice [blue,green,red]
-                np.add.at(acc, flat, a * w[:, None])
-                np.add.at(wsum, flat, w)
-
-    sampled = wsum > min_weight
-    if not sampled.any():
-        raise ValueError("no usable pixel pairs (check inputs)")
-    node = np.empty((n ** 3, 3))
-    node[sampled] = acc[sampled] / wsum[sampled, None]
-
-    grid = identity_grid(n)
-    empty = ~sampled
-    if empty.any():                            # extrapolate the grade to unsampled colors
-        fill = NearestNDInterpolator(grid[sampled], node[sampled])
-        node[empty] = fill(grid[empty])
-
-    if smoothing > 0:                          # regularize: smooth in the 3D color volume
-        lat = node.reshape(n, n, n, 3)
-        for c in range(3):
-            lat[..., c] = gaussian_filter(lat[..., c], sigma=smoothing, mode="nearest")
-        node = lat.reshape(-1, 3)
-    return np.clip(node, 0.0, 1.0)
-
-
-class _PairsLookTransform:
-    """Callable neutral_rgb -> graded_rgb: trilinear sample of the learned grade cube."""
-
-    def __init__(self, grade_cube: np.ndarray, size: int):
-        self._cube = grade_cube
-        self._size = size
-
-    def __call__(self, rgb: np.ndarray) -> np.ndarray:
-        return apply_cube(rgb, self._cube, self._size)
 
 
 class PairsFitter:
@@ -104,8 +43,8 @@ class PairsFitter:
                 raise ValueError(f"pair shape mismatch: {bi.shape} vs {ai.shape}")
             befores.append(bi.reshape(-1, 3))
             afters.append(ai.reshape(-1, 3))
-        grade = _learn_grade_cube(
+        grade = learn_grade_cube(
             np.concatenate(befores), np.concatenate(afters),
             self._size, self._smoothing, self._min_weight,
         )
-        return _PairsLookTransform(grade, self._size)
+        return CubeLookTransform(grade, self._size)

@@ -63,6 +63,33 @@ def test_tone_zero_preserves_luma_rgb():
     np.testing.assert_allclose(out @ w, base @ w, atol=1e-9)
 
 
+def test_idt_transports_toward_target():
+    from lutgen.fitter.rich import _idt
+
+    rng = np.random.default_rng(0)
+    source = rng.random((3000, 3))
+    target = rng.random((3000, 3)) * 0.3 + np.array([0.5, 0.1, 0.0])  # shifted/narrowed
+    out = _idt(source, target, iterations=20)
+    # marginal means + stds move toward the target
+    assert np.abs(out.mean(0) - target.mean(0)).sum() < np.abs(source.mean(0) - target.mean(0)).sum()
+    assert np.abs(out.std(0) - target.std(0)).sum() < np.abs(source.std(0) - target.std(0)).sum()
+
+
+def test_pdf_fitter_end_to_end(tmp_path):
+    from lutgen.orchestration.pipeline import render_cube
+
+    paths = []
+    for i, rimg in enumerate(_warm_refs(3)):
+        p = tmp_path / f"p{i}.png"
+        Image.fromarray((rimg * 255).astype(np.uint8), "RGB").save(p)
+        paths.append(p)
+    base = load_base()
+    cube = render_cube(paths, 1.0, fitter=RichFitter(method="pdf", iterations=8))
+    assert cube.samples.min() >= 0.0 and cube.samples.max() <= 1.0
+    np.testing.assert_array_equal(
+        render_cube(paths, 0.0, fitter=RichFitter(method="pdf", iterations=8)).samples, base)
+
+
 def test_end_to_end_render(tmp_path):
     from lutgen.orchestration.pipeline import render_cube
 
