@@ -6,7 +6,24 @@ import numpy as np
 
 from lutgen.engine.base import load_base
 from lutgen.engine.grid import flatten_lattice, identity_grid, reshape_to_lattice
-from lutgen.engine.regularize import clamp, enforce_neutral_monotonic, regularize
+from lutgen.engine.regularize import clamp, enforce_neutral_monotonic, gamut_clamp, regularize
+
+_W = np.array([0.2126, 0.7152, 0.0722])
+
+
+def test_gamut_clamp_in_range_identity():
+    base = load_base()
+    np.testing.assert_array_equal(gamut_clamp(base), base)   # byte-identical → s=0 stays exact
+
+
+def test_gamut_clamp_preserves_luma_and_hue():
+    c = np.array([1.4, 0.2, 0.1])            # out-of-range saturated red
+    out = gamut_clamp(c)
+    assert out.min() >= 0.0 and out.max() <= 1.0
+    np.testing.assert_allclose(out @ _W, c @ _W, atol=1e-6)  # luma preserved (hard clip would not)
+    # desaturates (chroma shrinks) but keeps red dominant
+    assert out[0] > out[1] > out[2]
+    assert (out.max() - out.min()) < (c.max() - min(c[1], c[2]))
 
 
 def test_clamp_range():
