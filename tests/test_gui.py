@@ -78,6 +78,31 @@ def test_threaded_compute_builds_look(app, tmp_path):
     w.close()
 
 
+def test_placement_switch_refreshes_preview_without_dirty(app, tmp_path):
+    from PIL import Image
+
+    from lutgen.app.main_window import MainWindow
+
+    paths = []
+    for i in range(2):
+        rng = np.random.default_rng(10 + i)
+        img = np.clip(rng.random((24, 24, 3)) * 0.6 + 0.1, 0, 1)
+        p = tmp_path / f"r{i}.png"
+        Image.fromarray((img * 255).astype(np.uint8), "RGB").save(p)
+        paths.append(str(p))
+    w = MainWindow()
+    w._refs = paths
+    w._refs_list.addItems(paths)
+    w._launch_compute(); _drain(app, w)               # compute the look
+    assert w._look_samples is not None and not w._dirty
+    look_before = w._look_samples
+    w._placement.setCurrentIndex(1)                   # switch to "between" → preview-only refresh
+    _drain(app, w)
+    assert not w._dirty                               # placement is preview-only, look stays current
+    assert w._look_samples is look_before             # not rebuilt
+    w.close()
+
+
 def test_export_writes_valid_cube(app, tmp_path):
     from lutgen.app.main_window import MainWindow
     from lutgen.engine.cube_io import write_cube
