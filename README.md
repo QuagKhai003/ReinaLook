@@ -56,19 +56,19 @@ your footage ──▶ [Node 1: → DWG/DI] ──▶ [ReinaLook .cube] ──�
 
 ## ⚔️ ReinaLook vs Higgsfield AI LUT
 
-Both are free. The difference is the approach: Higgsfield's AI LUT generator runs an AI model in the
-**cloud/browser**, while ReinaLook is a **desktop color-science tool** built around your Resolve
-DWG/DI → Rec.709 conversion.
+Higgsfield's AI LUT generator runs an AI model in the **cloud/browser** and uses **credits**.
+ReinaLook is a **free desktop color-science tool** built around your Resolve DWG/DI → Rec.709
+conversion.
 
 | | **ReinaLook** | **Higgsfield AI LUT** |
 |---|---|---|
 | **Runs** | Desktop app, offline | Cloud / browser |
 | **Method** | Color-science (optimal transport, Oklab) | AI model |
 | **Built around Resolve** | Yes — DWG/DI → Rec.709 base, replace Node 2 or sit between nodes | Generic LUT |
-| **Cost** | Free, no login | Free |
+| **Cost** | Free, unlimited, no login | Credits / account |
 
-Pick whichever fits your workflow — a quick AI vibe in the browser, or a desktop LUT tuned to your
-Resolve pipeline.
+Pick whichever fits your workflow — a credit-based AI vibe in the browser, or a free desktop LUT
+tuned to your Resolve pipeline.
 
 ---
 
