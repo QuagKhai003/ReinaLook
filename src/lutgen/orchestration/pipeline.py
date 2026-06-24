@@ -102,8 +102,17 @@ def render_cube_dual(
         idx = np.random.default_rng(0).choice(source_pixels.shape[0], sample_cap, replace=False)
         source_pixels = source_pixels[idx]
 
+    # Fit the transform on the neutral pool, then BOUND it through a smooth grade cube: apply the
+    # transform to the pool pixels and learn a cube from (neutral → moved). Colors outside the pool's
+    # coverage get the nearest learned grade (bounded) instead of unbounded linear extrapolation —
+    # without this, an affine calibrated on a narrow neutral pool explodes on saturated colors.
+    from lutgen.fitter._gradecube import learn_grade_cube
+
     look = fitter.fit(consensus, source_samples=source_pixels)
-    final = _assemble(look(base), strength, placement, size)
+    moved = look(source_pixels)
+    grade = learn_grade_cube(source_pixels, moved, size, smoothing=0.025, min_weight=1e-3)
+    look_samples = apply_cube(base, grade, size)
+    final = _assemble(look_samples, strength, placement, size)
     return Cube(size=size, samples=final, title=title)
 
 

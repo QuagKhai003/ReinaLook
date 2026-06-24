@@ -7,6 +7,9 @@
 @todo     Perceptual-space (Oklab) MKL; nonlinear N-d PDF transfer (Plan §3 rung 2).
 @limits   PURE numeric (fit reads the fixed base via load_base unless given source_samples).
           Rec.709 g2.4 space. Final clamp left to regularize. eps regularizes Sigma_source.
+          Robustness: cross-channel covariance is shrunk (_CROSS) and the MKL stretch is capped
+          (_MAX_STRETCH) so an ill-conditioned source (e.g. a tiny neutral pool) can't rotate hue
+          or explode colors out of gamut (would otherwise turn mid-tones magenta).
 @affects  Implements fitter/interface.LookFitter. Consumes ConsensusLook (mean+covariance).
           See ADR-0010 + Plan/30_LOOK_FITTER.md §3.
 """
@@ -37,12 +40,35 @@ def _psd_pow(m: np.ndarray, power: float) -> np.ndarray:
     return (v * (w ** power)) @ v.T
 
 
-def _mkl_matrix(cov_s: np.ndarray, cov_t: np.ndarray) -> np.ndarray:
-    """Monge-Kantorovich linear map A with A.Sigma_s.A^T = Sigma_t (symmetric solution)."""
+_MAX_STRETCH = 3.0    # cap how much MKL may scale any color axis (prevents gamut explosion)
+_CROSS = 0.0          # how much cross-channel (hue-rotating) covariance to keep; <1 = more robust
+
+
+def _shrink_cross(cov: np.ndarray, keep: float) -> np.ndarray:
+    """Shrink the off-diagonal (cross-channel) covariance toward 0. Full cross terms let MKL rotate
+    hue, which can send mid-tones to a wrong hue (e.g. skin → magenta) when source and target
+    distributions differ a lot. Keeping the diagonal preserves per-channel scale (safe)."""
+    d = np.diag(np.diag(cov))
+    return d + keep * (cov - d)
+
+
+def _mkl_matrix(cov_s: np.ndarray, cov_t: np.ndarray, max_stretch: float = _MAX_STRETCH) -> np.ndarray:
+    """Monge-Kantorovich linear map A with A.Sigma_s.A^T = Sigma_t (symmetric solution).
+
+    A's eigenvalues are clipped to [1/max_stretch, max_stretch]: when the source distribution is
+    narrow/ill-conditioned (e.g. a small neutral pool), the raw map can scale a color axis enormously
+    and blow colors out of gamut (hue-rotated, posterized). Capping the stretch keeps the mean +
+    moderate covariance match while bounding the worst case; gentle, well-conditioned fits are
+    unaffected (their eigenvalues are already within the cap)."""
+    cov_s = _shrink_cross(cov_s, _CROSS)
+    cov_t = _shrink_cross(cov_t, _CROSS)
     s_half = _psd_pow(cov_s, 0.5)
     s_ihalf = _psd_pow(cov_s, -0.5)
     middle = _psd_pow(s_half @ cov_t @ s_half, 0.5)
-    return s_ihalf @ middle @ s_ihalf
+    a = s_ihalf @ middle @ s_ihalf
+    w, v = np.linalg.eigh(_sym(a))                       # symmetric PSD → eig = singular values
+    w = np.clip(w, 1.0 / max_stretch, max_stretch)
+    return (v * w) @ v.T
 
 
 def _cdf_match_1d(s: np.ndarray, t: np.ndarray) -> np.ndarray:
@@ -139,3 +165,4 @@ class RichFitter:
         looked_rgb = from_oklab(looked_lab)
         grade = learn_grade_cube(src, looked_rgb, self._size, self._smoothing, 1e-3)
         return CubeLookTransform(grade, self._size)
+
