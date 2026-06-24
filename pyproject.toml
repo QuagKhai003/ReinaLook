@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5"]
 gui = ["PySide6>=6.6"]
+package = ["pyinstaller>=6"]
 
 [project.scripts]
 lutgen = "lutgen.cli:main"
