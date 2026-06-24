@@ -32,9 +32,11 @@ def make_test_still(height: int = 256, width: int = 512) -> np.ndarray:
     return still.astype(np.float64)
 
 
-def load_preview_still(path, max_dim: int | None = None) -> np.ndarray:
-    """Load a real DWG/DI frame (Node 1 on, Node 2 off) as the preview still. Full resolution by
-    default (max_dim=None); the look is applied off the UI thread so a large still stays responsive."""
+def load_preview_still(path, max_dim: int | None = 900) -> np.ndarray:
+    """Load a real DWG/DI frame (Node 1 on, Node 2 off) as the preview still, downscaled for a
+    responsive preview. The on-screen preview is ~520 px wide, so a larger still gains no visible
+    detail but makes the cube-apply slow; 900 px keeps the apply fast enough to render synchronously.
+    (Export uses the full-resolution base/look cube, not this still.)"""
     return load_image(path, max_dim=max_dim)
 
 
