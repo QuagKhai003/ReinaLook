@@ -39,12 +39,21 @@ def test_identity_grade():
     np.testing.assert_allclose(look(test), test, atol=0.04)
 
 
-def test_mismatched_pairs_raises():
+def test_count_mismatch_raises():
     b, a = _pair(0)
     with pytest.raises(ValueError):
-        PairsFitter().fit_from_pairs([b, b], [a])           # count mismatch
+        PairsFitter().fit_from_pairs([b, b], [a])           # unequal list lengths
     with pytest.raises(ValueError):
-        PairsFitter().fit_from_pairs([b], [a[:100]])        # shape mismatch
+        PairsFitter().fit_from_pairs([b], [a[:, :, 0]])      # not an (H,W,3) image
+
+
+def test_different_sized_pair_no_error():
+    # Same frame exported at different resolutions must NOT raise (after resized to before).
+    before = np.random.default_rng(5).random((180, 240, 3))
+    after = _grade(np.random.default_rng(6).random((360, 480, 3)))  # different size
+    look = PairsFitter().fit_from_pairs([before], [after])          # was a shape-mismatch error
+    out = look(np.random.default_rng(7).random((100, 3)))
+    assert out.shape == (100, 3) and np.isfinite(out).all()
 
 
 def _write(path, img):
