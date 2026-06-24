@@ -25,6 +25,7 @@ from lutgen.fitter.mid import MidFitter
 from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.consensus import build_consensus
 from lutgen.orchestration.ingest import load_image
+from lutgen.orchestration.pipeline import _assemble
 from lutgen.orchestration.preset import save_preset
 from lutgen.orchestration.stats import compute_stats
 
@@ -146,8 +147,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._fitter = QtWidgets.QComboBox(); self._fitter.addItems(["Rich", "Mid"])
         self._method = QtWidgets.QComboBox(); self._method.addItems(["mkl", "pdf"])
         self._space = QtWidgets.QComboBox(); self._space.addItems(["oklab", "rgb"])
+        self._placement = QtWidgets.QComboBox()
+        self._placement.addItems(["Replace Node 2", "Between Node 1 & 2"])
         for c in (self._fitter, self._method, self._space):
             c.currentIndexChanged.connect(self._on_fitter_changed)
+        self._placement.currentIndexChanged.connect(self._on_placement)
 
         self._tone = self._slider(100, self._on_tone)
         self._tone_lbl = QtWidgets.QLabel("Tone (exposure match): 1.00")
@@ -155,6 +159,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._strength_lbl = QtWidgets.QLabel("Strength: 0.80")
 
         form = QtWidgets.QFormLayout()
+        form.addRow("Placement", self._placement)
         form.addRow("Fitter", self._fitter)
         form.addRow("Method", self._method)
         form.addRow("Space", self._space)
@@ -270,10 +275,13 @@ class MainWindow(QtWidgets.QMainWindow):
         report(60)
         return look(self._base)
 
+    def _placement_key(self) -> str:
+        return "between" if self._placement.currentIndex() == 1 else "node2"
+
     def _final_samples(self) -> np.ndarray:
         if self._look_samples is None:
             return self._base
-        return regularize(blend(self._base, self._look_samples, self._strength_value()))
+        return _assemble(self._look_samples, self._strength_value(), self._placement_key(), 33)
 
     def _snapshot(self, refit: bool) -> dict:
         return dict(
@@ -281,7 +289,7 @@ class MainWindow(QtWidgets.QMainWindow):
             before=list(self._before), after=list(self._after),
             fitter=self._fitter.currentText(), method=self._method.currentText(),
             space=self._space.currentText(), tone=self._tone_value(),
-            strength=self._strength_value(), still=self._still,
+            strength=self._strength_value(), still=self._still, placement=self._placement_key(),
             still_dirty=self._still_dirty, look=self._look_samples,
         )
 
@@ -290,17 +298,25 @@ class MainWindow(QtWidgets.QMainWindow):
         report(1)
         look = self._build_look(snap, report) if snap["refit"] else snap["look"]
         report(66)
-        final = self._base if look is None else regularize(blend(self._base, look, snap["strength"]))
+        final = self._base if look is None else _assemble(look, snap["strength"], snap["placement"], 33)
         report(70)
         before = None
-        if snap["still_dirty"]:                  # split the apply budget across before+after
-            before = apply_cube(snap["still"], self._base,
-                                progress=lambda f: report(70 + int(14 * f)))
-            after = apply_cube(snap["still"], final, progress=lambda f: report(84 + int(15 * f)))
+        if snap["still_dirty"]:
+            before = apply_cube(snap["still"], self._base, progress=lambda f: report(70 + int(10 * f)))
+            after = self._apply_final(snap, final, look, report, 80, 99)
         else:
-            after = apply_cube(snap["still"], final, progress=lambda f: report(70 + int(29 * f)))
+            after = self._apply_final(snap, final, look, report, 70, 99)
         report(100)
         return look, before, after, snap["refit"]
+
+    def _apply_final(self, snap, final, look, report, lo, hi):
+        """Apply the final cube to the preview still. For 'between' placement the cube is
+        DWG/DI→DWG/DI, so Node 2 (base) is applied after to show the Rec.709 result."""
+        if snap["placement"] == "between" and look is not None:
+            mid = (lo + hi) // 2
+            looked = apply_cube(snap["still"], final, progress=lambda f: report(lo + int((mid - lo) * f)))
+            return apply_cube(looked, self._base, progress=lambda f: report(mid + int((hi - mid) * f)))
+        return apply_cube(snap["still"], final, progress=lambda f: report(lo + int((hi - lo) * f)))
 
     # — scheduling: debounce sliders, fire discrete actions now —
     def _set_busy(self, on: bool) -> None:
@@ -362,6 +378,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_fitter_changed(self, _=None) -> None:
         self._sync_controls(); self._trigger_now(True)         # discrete combo → compute now
+
+    def _on_placement(self, _=None) -> None:
+        self._trigger_now(False)   # look unchanged; only re-assemble + preview
 
     def _on_tone(self, _=None) -> None:
         self._tone_lbl.setText(f"Tone (exposure match): {self._tone_value():.2f}")

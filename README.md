@@ -69,7 +69,8 @@ lutgen render-pairs --before n1.png n2.png --after g1.png g2.png --out my_grade.
 lutgen render --refs r1.png r2.png --out look.cube --save-preset look.json
 lutgen render --preset look.json --out look.cube
 ```
-Flags: `--fitter mid|rich`, `--method mkl|pdf`, `--space oklab|rgb`, `--tone 0..1`, `--strength 0..1`.
+Flags: `--fitter mid|rich`, `--method mkl|pdf`, `--space oklab|rgb`, `--tone 0..1`, `--strength 0..1`,
+`--placement node2|between` (replace Node 2, or a DWG/DI look between Node 1 & 2 keeping both).
 
 ---
 
