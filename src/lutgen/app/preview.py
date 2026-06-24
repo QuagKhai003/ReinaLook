@@ -32,9 +32,9 @@ def make_test_still(height: int = 256, width: int = 512) -> np.ndarray:
     return still.astype(np.float64)
 
 
-def load_preview_still(path, max_dim: int = 480) -> np.ndarray:
-    """Load a real DWG/DI frame (Node 1 on, Node 2 off) as the preview still, downscaled for a
-    responsive live preview."""
+def load_preview_still(path, max_dim: int | None = None) -> np.ndarray:
+    """Load a real DWG/DI frame (Node 1 on, Node 2 off) as the preview still. Full resolution by
+    default (max_dim=None); the look is applied off the UI thread so a large still stays responsive."""
     return load_image(path, max_dim=max_dim)
 
 

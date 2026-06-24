@@ -20,29 +20,60 @@ def app():
     return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 
+def _drain(app, w):
+    """Let any background compute thread finish (offscreen)."""
+    for _ in range(100):
+        app.processEvents()
+        if w._thread is None or not w._thread.isRunning():
+            break
+        w._thread.wait(50)
+    app.processEvents()
+
+
 def test_window_builds_and_previews(app):
     from lutgen.app.main_window import MainWindow
 
     w = MainWindow()
     assert w.windowTitle() == "LookForge"
-    # no refs yet → final == base
-    np.testing.assert_array_equal(w._final_samples(), w._base)
-    w._on_strength(50)  # must not raise; updates preview
+    np.testing.assert_array_equal(w._final_samples(), w._base)  # no refs → base
+    w._on_strength(50)   # must not raise (debounced)
+    _drain(app, w)
+    w.close()
 
 
 def test_mode_and_fitter_controls(app):
     from lutgen.app.main_window import MainWindow
 
     w = MainWindow()
-    # toggle fitter/method/space — must not raise; no refs so look stays None (base)
-    w._fitter.setCurrentText("Mid"); app.processEvents()
-    w._fitter.setCurrentText("Rich"); w._method.setCurrentText("pdf"); app.processEvents()
-    w._space.setCurrentText("rgb"); app.processEvents()
-    np.testing.assert_array_equal(w._final_samples(), w._base)
-    # switch to Neutral+Graded pools — page swaps, fitter controls stay active
-    w._mode.setCurrentIndex(1); app.processEvents()
+    w._fitter.setCurrentText("Mid"); _drain(app, w)
+    w._fitter.setCurrentText("Rich"); w._method.setCurrentText("pdf"); _drain(app, w)
+    w._space.setCurrentText("rgb"); _drain(app, w)
+    np.testing.assert_array_equal(w._final_samples(), w._base)   # no refs → base
+    w._mode.setCurrentIndex(1); _drain(app, w)                   # Neutral+Graded pools
     assert w._is_pairs() and w._fitter.isEnabled()
     assert w._final_samples().shape == (35937, 3)
+    w.close()
+
+
+def test_threaded_compute_builds_look(app, tmp_path):
+    from PIL import Image
+
+    from lutgen.app.main_window import MainWindow
+
+    paths = []
+    for i in range(2):
+        rng = np.random.default_rng(i)
+        img = np.clip(rng.random((32, 32, 3)) * 0.6 + np.array([0.18, 0.0, -0.12]), 0, 1)
+        p = tmp_path / f"r{i}.png"
+        Image.fromarray((img * 255).astype(np.uint8), "RGB").save(p)
+        paths.append(str(p))
+    w = MainWindow()
+    w._refs = paths
+    w._refs_list.addItems(paths)
+    w._trigger_now(True)          # runs the look build off-thread + spinner
+    _drain(app, w)
+    assert w._look_samples is not None and w._look_samples.shape == (35937, 3)
+    w.close()
 
 
 def test_export_writes_valid_cube(app, tmp_path):
