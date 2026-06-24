@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import numpy as np
 
-DEFAULT_SIZE = 33
+DEFAULT_SIZE = 65
 
 # Flat ordering of grid nodes: red varies FASTEST (innermost), blue SLOWEST (outermost).
 # LOCKED against a real Resolve export in ADR-0001 batch 0.6: Resolve's .cube data lines vary

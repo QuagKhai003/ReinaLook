@@ -16,7 +16,7 @@ def test_write_read_round_trip(tmp_path):
     p = tmp_path / "base.cube"
     write_cube(p, samples, title="LookForge test")
     cube = read_cube(p)
-    assert cube.size == 33
+    assert cube.size == 65
     assert cube.title == "LookForge test"
     assert cube.domain_min == (0.0, 0.0, 0.0)
     assert cube.domain_max == (1.0, 1.0, 1.0)
@@ -28,7 +28,7 @@ def test_header_present(tmp_path):
     write_cube(p, identity_grid(), title="X")
     text = p.read_text(encoding="utf-8")
     assert 'TITLE "X"' in text
-    assert "LUT_3D_SIZE 33" in text
+    assert "LUT_3D_SIZE 65" in text
     assert text.splitlines()[1].startswith("LUT_3D_SIZE")  # after TITLE
 
 

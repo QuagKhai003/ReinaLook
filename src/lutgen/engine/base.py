@@ -22,7 +22,7 @@ import numpy as np
 
 from .cube_io import Cube, read_cube
 
-DEFAULT_SIZE = 33
+DEFAULT_SIZE = 65   # output/base resolution (65-point base for sharper Replace; ADR-0019)
 INVERSE_SIZE = 65   # the inverse is higher-resolution (steep ill-conditioned map; ADR-0018)
 BASE_ASSET = "base_dwg_di_to_rec709_g24.cube"
 INVERSE_ASSET = "base_inverse_rec709_to_dwg_di.cube"  # Rec.709 -> DWG/DI (ADR-0009/0018)

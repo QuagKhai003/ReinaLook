@@ -33,7 +33,7 @@ def test_strength_zero_is_base(tmp_path):
 def test_render_valid_and_warm(tmp_path):
     base = load_base()
     cube = render_cube(_refs(tmp_path), 1.0, title="warm")
-    assert cube.size == 33 and cube.samples.shape == (35937, 3)
+    assert cube.size == 65 and cube.samples.shape == (274625, 3)
     assert cube.samples.min() >= 0.0 and cube.samples.max() <= 1.0
     assert cube.title == "warm"
     warmth = lambda x: x[:, 0].mean() - x[:, 2].mean()
@@ -56,7 +56,7 @@ def test_dual_pool_unpaired(tmp_path):
     tgt = _refs(tmp_path, 2)  # warm graded
     base = load_base()
     cube = render_cube_dual(src, tgt, 1.0, fitter=RichFitter(space="rgb"))
-    assert cube.samples.shape == (35937, 3)
+    assert cube.samples.shape == (274625, 3)
     assert cube.samples.min() >= 0.0 and cube.samples.max() <= 1.0
     warmth = lambda x: x[:, 0].mean() - x[:, 2].mean()
     assert warmth(cube.samples) > warmth(base)                       # target look imposed

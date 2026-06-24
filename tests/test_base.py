@@ -11,7 +11,7 @@ from lutgen.engine.grid import reshape_to_lattice
 
 def test_shape_and_range():
     base = load_base()
-    assert base.shape == (33 ** 3, 3)
+    assert base.shape == (65 ** 3, 3)
     assert base.dtype == np.float64
     assert base.min() >= 0.0 and base.max() <= 1.0  # Resolve output, clamped
 
@@ -23,8 +23,7 @@ def test_black_maps_to_black():
 def test_neutral_axis_stays_neutral():
     # Greys must stay neutral (no cast) in the verified base.
     lat = reshape_to_lattice(load_base())
-    step = 33 - 1
-    for k in (0, 8, 16, 24, 32):
+    for k in (0, 16, 32, 48, 64):
         rgb = lat[k, k, k]  # lattice[blue,green,red]: the grey node has b=g=r=k
         np.testing.assert_allclose(rgb, [rgb[0]] * 3, atol=2e-3)
 
@@ -49,5 +48,5 @@ def test_highlight_rolloff_present():
     # Sanity: the base rolls off (does NOT clip ~code 0.5 like the pure synth). Grey at code
     # ~0.5 should be well below 1.0 — evidence the DaVinci tone map is baked in.
     lat = reshape_to_lattice(load_base())
-    mid = lat[16, 16, 16][0]  # ~code 0.5 grey
+    mid = lat[32, 32, 32][0]  # ~code 0.5 grey
     assert 0.6 < mid < 0.95
