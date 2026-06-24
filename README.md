@@ -1,38 +1,109 @@
 # LookForge — LUT Generator
 
-Desktop app that generates a single **33-point 3D `.cube` LUT** converting footage from
-**DaVinci Wide Gamut / DaVinci Intermediate (DWG/DI)** → **Rec.709 Gamma 2.4**, with a
-creative **look** extracted from reference images baked on top, controlled by one
-**strength** dial.
+Generates a 33-point 3D `.cube` LUT that **replaces Resolve's Node 2** (DaVinci Wide Gamut /
+DaVinci Intermediate → Rec.709 Gamma 2.4) and bakes a creative **look** — extracted from your
+reference images — on top, driven by one **strength** dial.
 
-`final = base + strength · (look − base)` — at `strength = 0` the output equals the exact,
-deterministic conversion. The conversion base can never be broken by the look.
+Pipeline: `source → [Node 1 → DWG/DI] → [LookForge cube = Node 2] → Rec.709 + look`. The protected
+base is your verified Resolve conversion; at `strength = 0` the output equals it exactly.
 
-## Status
-**MVP shipped** (M0–M4). Generate a look `.cube` from reference images:
+---
+
+## Install (developers)
 ```bash
-lutgen render --refs ref1.png ref2.png --strength 0.8 --out look.cube --title "My look"
+pip install -e ".[dev,gui]"   # first time (gui adds PySide6)
+pytest -q                     # 115 offline tests
 ```
-`--strength 0` emits the pure base; `--save-preset look.json` / `--preset look.json` reuse a recipe.
-Apply the `.cube` as Node 2 in Resolve. Next (optional): M5 GUI, M6 Rich fitter.
+
+---
+
+## Open the app
+
+**Option A — packaged app (no Python needed):** double-click **`LookForge.exe`** (Windows) from the
+`dist/` folder after building (see "Build the app" below). It opens the desktop window directly.
+
+**Option B — from source:**
+```bash
+lutgen-gui              # if installed (pip install -e .)
+# or:
+python -m lutgen.app
+```
+
+### Using the GUI
+1. **Mode** (top-left):
+   - **References** — extract the look from graded stills (your reference images).
+   - **Before/After pairs** — learn your *exact* grade from matched frames (most accurate).
+2. **References mode:** click **+ Add references…**, pick your look stills (e.g. the graded frames).
+   Choose:
+   - **Fitter:** `Rich` (recommended) or `Mid` (simple baseline).
+   - **Method:** `mkl` (palette: mean+covariance) or `pdf` (full distribution, richest).
+   - **Space:** `oklab` (perceptual, recommended) or `rgb`.
+   - **Tone** slider: lower = keep your footage's brightness; higher = also match the refs' exposure.
+3. **Before/After pairs mode:** **+ Add BEFORE** (your frames with the grade OFF — Node 1+2 only) and
+   **+ Add AFTER** (the same frames with your grade ON). Equal counts. LookForge learns the exact grade.
+4. **Strength** slider: how much of the look to apply (0 = your original, 1 = full look).
+5. **Load preview still…** — load a real **DWG/DI** frame (a clip with Node 1 on, Node 2 off) to see a
+   faithful *before / after* on the right. (The built-in still is synthetic and just a placeholder.)
+6. **Export .cube…** — save the LUT. **Save preset…** — save the recipe (References mode).
+
+### Apply it in Resolve
+Replace your **Node 2** (the DWG/DI → Rec.709 CST) with this `.cube` (a LUT or CST node). Keep Node 1
+and any adjustments between nodes. The cube does the conversion **and** the look.
+
+---
+
+## Command line
+```bash
+# References → look cube (Rich, Oklab, full PDF transport):
+lutgen render --refs r1.png r2.png r3.png --fitter rich --space oklab --method pdf \
+              --strength 0.8 --tone 0.5 --out look.cube --title "My look"
+
+# Learn the EXACT grade from before/after frames:
+lutgen render-pairs --before n1.png n2.png --after g1.png g2.png --out my_grade.cube
+
+# strength 0 = the pure base (your Node 2). Presets:
+lutgen render --refs r1.png r2.png --out look.cube --save-preset look.json
+lutgen render --preset look.json --out look.cube
+```
+Flags: `--fitter mid|rich`, `--method mkl|pdf`, `--space oklab|rgb`, `--tone 0..1`, `--strength 0..1`.
+
+---
+
+## Build the app
+```bash
+pip install -e ".[gui,package]"
+pyinstaller --noconfirm packaging/LookForge.spec
+# → dist/LookForge.exe  (Windows)
+```
+The build bundles Python, PySide6, numpy/scipy/colour-science, and the base `.cube` assets into one
+file. (macOS: same command produces a `dist/LookForge` binary; wrap into `.app` if desired.)
+
+---
+
+## Fitter quick guide
+| Fitter / mode | What it does | Use when |
+|---|---|---|
+| `mid` | per-channel histogram match | quick, simple |
+| `rich --method mkl` | palette transport (mean + covariance) | good default |
+| `rich --method pdf` | full distribution transport (Pitié IDT) | richest, references-only |
+| `render-pairs` | learns the exact grade from before/after | you can export pairs (best) |
+
+All share the protected base; `strength = 0` is always your untouched Node 2.
+
+---
 
 ## Layout
 ```
 src/lutgen/
-  engine/         # L1 — color engine: grid, spaces, convert, strength, cube_io, regularize
-  fitter/         # L2 — look fitter (Mid MVP, Rich later) behind one interface
-  orchestration/  # L3 — references → consensus → look → cube
-  app/            # L4 — desktop shell (PySide6)
-  cli.py          # terminal entry (MVP)
-tests/
-```
-
-## Run
-```bash
-pip install -e ".[dev]"      # first time
-pytest -q                    # fast offline suite
+  engine/         # L1 — base (loaded Resolve cube), grid, spaces, cube_io, strength, regularize, apply, perceptual
+  fitter/         # L2 — mid, rich (mkl/pdf, oklab/rgb), pairs — behind one LookFitter interface
+  orchestration/  # L3 — ingest, stats, consensus, pipeline, preset
+  app/            # L4 — PySide6 desktop shell
+  cli.py          # terminal entry
+packaging/        # PyInstaller spec + launcher
+tests/            # 115 offline tests
 ```
 
 ## Notes
-Planning, workflow, and project-management docs are kept **local / untracked** (see
-`.gitignore`). Git history is code-only.
+Planning/workflow/PM docs and all images (`*.png`/`*.jpg`) are kept **local / untracked**. Git
+history is code-only.
