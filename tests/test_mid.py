@@ -93,7 +93,7 @@ def test_neutral_axis_stays_monotone():
     out = look(base)
     from lutgen.engine.grid import reshape_to_lattice
 
-    diag = reshape_to_lattice(out)[np.arange(33), np.arange(33), np.arange(33)]
+    diag = reshape_to_lattice(out)[np.arange(65), np.arange(65), np.arange(65)]
     luma = diag @ np.array([0.2126, 0.7152, 0.0722])
     assert np.all(np.diff(luma) > -1e-6)  # non-decreasing brightness along greys
 
@@ -103,7 +103,7 @@ def test_end_to_end_render_valid_cube():
     consensus = build_consensus([compute_stats(r) for r in _warm_refs()])
     look_samples = MidFitter().fit(consensus)(base)
     final = regularize(blend(base, look_samples, 1.0))
-    cube = Cube(size=33, samples=final)
+    cube = Cube(size=65, samples=final)
     assert cube.samples.min() >= 0.0 and cube.samples.max() <= 1.0
     assert _mean_warmth(cube.samples) > _mean_warmth(base)
 
