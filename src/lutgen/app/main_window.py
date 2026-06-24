@@ -70,7 +70,7 @@ def _file_list():
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("LookForge")
+        self.setWindowTitle("ReinaLook")
         self._base = load_base()
         self._still = make_test_still()
         self._before_img = apply_cube(self._still, self._base)  # cached preview "before"
@@ -354,7 +354,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_controls_enabled(True)
         if isinstance(result, Exception):
             self._compute_btn.setText("Compute preview ●" if self._dirty else "Compute preview")
-            QtWidgets.QMessageBox.warning(self, "LookForge", f"Could not build look:\n{result}")
+            QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not build look:\n{result}")
             return
         self._look_samples = result
         self._dirty = False                       # look is now current
@@ -432,7 +432,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._set_busy(True); QtWidgets.QApplication.processEvents()
                 self._look_samples = self._build_look(self._snapshot(True), lambda _p: None)
             except Exception as exc:
-                QtWidgets.QMessageBox.warning(self, "LookForge", f"Could not build look:\n{exc}")
+                QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not build look:\n{exc}")
             finally:
                 self._set_busy(False)
         if self._look_samples is None:
@@ -441,12 +441,12 @@ class MainWindow(QtWidgets.QMainWindow):
                        f"{len(self._after)} graded (need at least one of each).")
             else:
                 msg = "Add reference images first."
-            QtWidgets.QMessageBox.warning(self, "LookForge", msg)
+            QtWidgets.QMessageBox.warning(self, "ReinaLook", msg)
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export .cube", "look.cube", "Cube (*.cube)")
         if path:
-            write_cube(path, self._final_samples(), title="LookForge")
-            QtWidgets.QMessageBox.information(self, "LookForge", f"Wrote {path}")
+            write_cube(path, self._final_samples(), title="ReinaLook")
+            QtWidgets.QMessageBox.information(self, "ReinaLook", f"Wrote {path}")
 
     def closeEvent(self, event) -> None:
         if self._thread is not None and self._thread.isRunning():
@@ -455,8 +455,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _save_preset(self) -> None:
         if self._is_pairs():
-            QtWidgets.QMessageBox.information(self, "LookForge", "Presets apply to References mode.")
+            QtWidgets.QMessageBox.information(self, "ReinaLook", "Presets apply to References mode.")
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save preset", "look.json", "JSON (*.json)")
         if path:
-            save_preset(path, self._refs, self._strength_value(), title="LookForge")
+            save_preset(path, self._refs, self._strength_value(), title="ReinaLook")
