@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 from lutgen.engine.apply import apply_cube
-from lutgen.engine.base import DEFAULT_SIZE, load_base, load_base_inverse
+from lutgen.engine.base import DEFAULT_SIZE, INVERSE_SIZE, load_base, load_base_inverse
 from lutgen.engine.cube_io import Cube
 from lutgen.engine.grid import identity_grid
 from lutgen.engine.regularize import regularize
@@ -39,7 +39,8 @@ def _assemble(looked_full: np.ndarray, strength: float, placement: str, size: in
     """
     base = load_base(size)
     if placement == "between":
-        dwgdi_full = apply_cube(regularize(looked_full, size), load_base_inverse(size), size)
+        # map the look back to DWG/DI via the higher-res inverse (applied at its own size)
+        dwgdi_full = apply_cube(regularize(looked_full, size), load_base_inverse(), INVERSE_SIZE)
         return regularize(blend(identity_grid(size), dwgdi_full, strength), size)
     return regularize(blend(base, looked_full, strength), size)
 
@@ -67,36 +68,6 @@ def render_cube(
     look = fitter.fit(consensus)
 
     final = _assemble(look(base), strength, placement, size)
-    return Cube(size=size, samples=final, title=title)
-
-
-def render_look_cube(
-    ref_paths,
-    strength: float = 1.0,
-    *,
-    tone_strength: float = 0.0,
-    title: str | None = None,
-    max_dim: int | None = 1024,
-    size: int = DEFAULT_SIZE,
-) -> Cube:
-    """Build a LOOK-ONLY cube in DWG/DI space, applied BETWEEN Node 1 and Node 2 (ADR-0009).
-
-    Node 1 and Node 2 stay unchanged; this cube (DWG/DI -> DWG/DI) carries only the creative look,
-    so Node 2 still does the technical conversion and brightness/contrast/saturation are preserved.
-    References (Rec.709) are pulled into DWG/DI via the inverse base cube. ``strength = 0`` returns
-    the identity grid (pass-through). ``tone_strength`` defaults to 0 (exposure preserved; Node 2
-    owns tone).
-    """
-    inverse = load_base_inverse(size)
-    grid = identity_grid(size)
-
-    images = load_references(ref_paths, max_dim=max_dim)
-    refs_dwg = [apply_cube(img, inverse, size) for img in images]  # Rec.709 -> DWG/DI
-    consensus = build_consensus([compute_stats(r) for r in refs_dwg])
-
-    look = MidFitter(tone_strength=tone_strength).fit(consensus, source_samples=grid)
-    look_samples = look(grid)
-    final = regularize(blend(grid, look_samples, strength), size)
     return Cube(size=size, samples=final, title=title)
 
 

@@ -21,7 +21,6 @@ from lutgen.orchestration.pipeline import (
     render_cube,
     render_cube_dual,
     render_cube_from_pairs,
-    render_look_cube,
 )
 from lutgen.orchestration.preset import load_preset, save_preset
 
@@ -51,19 +50,6 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--preset", default=None, help="load refs/strength/title from a preset JSON")
     r.add_argument("--save-preset", default=None, help="write the settings used to a preset JSON")
     r.add_argument("--max-dim", type=int, default=1024, help="downscale refs to this max side")
-
-    rl = sub.add_parser(
-        "render-look",
-        help="render a LOOK-ONLY cube applied between Node 1 and Node 2 (DWG/DI, recommended)",
-    )
-    rl.add_argument("--refs", nargs="*", default=None, help="reference image paths")
-    rl.add_argument("--strength", type=float, default=None, help="look strength 0..1 (default 1.0)")
-    rl.add_argument("--tone", type=float, default=0.0, help="tonal match 0..1 (default 0 = exposure preserved)")
-    rl.add_argument("--out", "-o", required=True, help="output .cube path")
-    rl.add_argument("--title", default=None, help="cube TITLE")
-    rl.add_argument("--preset", default=None, help="load refs/strength/title from a preset JSON")
-    rl.add_argument("--save-preset", default=None, help="write the settings used to a preset JSON")
-    rl.add_argument("--max-dim", type=int, default=1024, help="downscale refs to this max side")
 
     rp = sub.add_parser(
         "render-pairs",
@@ -118,20 +104,6 @@ def _cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_render_look(args: argparse.Namespace) -> int:
-    refs, strength, title = _resolve(args)
-    if not refs:
-        print("error: no references (pass --refs or --preset)", file=sys.stderr)
-        return 2
-    cube = render_look_cube(refs, strength, tone_strength=args.tone, title=title, max_dim=args.max_dim)
-    write_cube(args.out, cube.samples, cube.size, title=cube.title)
-    if args.save_preset:
-        save_preset(args.save_preset, refs, strength, title)
-    print(f"wrote {args.out}  (DWG/DI look between Node 1&2, {len(refs)} refs, "
-          f"strength {strength}, tone {args.tone})")
-    return 0
-
-
 def _cmd_render_pairs(args: argparse.Namespace) -> int:
     if len(args.before) != len(args.after):
         print("error: --before and --after must have the same number of frames", file=sys.stderr)
@@ -149,8 +121,6 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "render":
         return _cmd_render(args)
-    if args.command == "render-look":
-        return _cmd_render_look(args)
     if args.command == "render-pairs":
         return _cmd_render_pairs(args)
     return 1
