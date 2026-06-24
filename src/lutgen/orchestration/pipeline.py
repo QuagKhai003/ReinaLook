@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from lutgen.engine.adjust import Adjustments, apply_adjustments
 from lutgen.engine.apply import apply_cube
 from lutgen.engine.base import DEFAULT_SIZE, INVERSE_SIZE, load_base, load_base_inverse
 from lutgen.engine.cube_io import Cube
@@ -52,22 +53,27 @@ def render_cube(
     title: str | None = None,
     fitter: LookFitter | None = None,
     placement: str = "node2",
+    adjust: Adjustments | None = None,
     max_dim: int | None = 1024,
     size: int = DEFAULT_SIZE,
 ) -> Cube:
-    """Build a finished `.cube` from reference images at the given strength.
-
-    Steps: load refs → per-image stats → consensus → fit a LookTransform → sample on the protected
-    base → assemble for ``placement`` ("node2" replace, or "between" Node 1 & 2) → blend by strength.
+    """Build a finished `.cube`. References optional — with ``ref_paths`` empty and ``adjust`` set,
+    this is a pure manual grade over the base. Steps: refs → consensus → fit → sample on base →
+    creative ``adjust`` → assemble for ``placement`` → blend by strength.
     """
-    fitter = fitter or MidFitter()
     base = load_base(size)
+    if ref_paths:
+        fitter = fitter or MidFitter()
+        images = load_references(ref_paths, max_dim=max_dim)
+        consensus = build_consensus([compute_stats(img) for img in images])
+        looked = fitter.fit(consensus)(base)
+    else:
+        looked = base.copy()                 # manual-only: adjustments over the base
 
-    images = load_references(ref_paths, max_dim=max_dim)
-    consensus = build_consensus([compute_stats(img) for img in images])
-    look = fitter.fit(consensus)
+    if adjust is not None:
+        looked = apply_adjustments(looked, adjust)
 
-    final = _assemble(look(base), strength, placement, size)
+    final = _assemble(looked, strength, placement, size)
     return Cube(size=size, samples=final, title=title)
 
 
@@ -79,6 +85,7 @@ def render_cube_dual(
     fitter: LookFitter | None = None,
     title: str | None = None,
     placement: str = "node2",
+    adjust: Adjustments | None = None,
     max_dim: int | None = 1024,
     size: int = DEFAULT_SIZE,
     sample_cap: int = 200_000,
@@ -112,6 +119,8 @@ def render_cube_dual(
     moved = look(source_pixels)
     grade = learn_grade_cube(source_pixels, moved, size, smoothing=0.025, min_weight=1e-3)
     look_samples = apply_cube(base, grade, size)
+    if adjust is not None:
+        look_samples = apply_adjustments(look_samples, adjust)
     final = _assemble(look_samples, strength, placement, size)
     return Cube(size=size, samples=final, title=title)
 
