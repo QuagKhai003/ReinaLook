@@ -73,7 +73,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("ReinaLook")
         self._base = load_base()
         self._still = make_test_still()
-        self._before_img = apply_cube(self._still, self._base)  # cached preview "before"
+        self._before_img = apply_cube(self._still, self._base)   # preview at strength 0
+        self._prev_look_img = self._before_img                   # preview at strength 1 (no look yet)
         self._look_samples: np.ndarray | None = None
         self._refs: list[str] = []
         self._before: list[str] = []
@@ -280,10 +281,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def _placement_key(self) -> str:
         return "between" if self._placement.currentIndex() == 1 else "node2"
 
-    def _final_samples(self) -> np.ndarray:
+    def _final_at(self, strength: float) -> np.ndarray:
         if self._look_samples is None:
             return self._base
-        return _assemble(self._look_samples, self._strength_value(), self._placement_key(), DEFAULT_SIZE)
+        return _assemble(self._look_samples, strength, self._placement_key(), DEFAULT_SIZE)
+
+    def _final_samples(self) -> np.ndarray:   # exact cube at the current strength (for export)
+        return self._final_at(self._strength_value())
 
     def _snapshot(self, refit: bool) -> dict:
         return dict(
@@ -302,18 +306,28 @@ class MainWindow(QtWidgets.QMainWindow):
         report(100)
         return look
 
-    # — fast, synchronous preview render (still / placement / strength changes) —
+    # — preview cache: precompute the still at strength 0 and 1, so the strength slider is a
+    #   cheap image lerp (trilinear apply is linear in the cube → exact for 'between', a close
+    #   approximation under node2's gamut clamp; export always uses the exact _final_samples). —
     def _apply_to_still(self, final):
-        """Apply the final cube to the (preview-sized) still. For 'between' the cube is
-        DWG/DI→DWG/DI, so apply Node 2 (base) after to show the Rec.709 result."""
+        """Apply a cube to the still. For 'between' the cube is DWG/DI→DWG/DI, so apply Node 2
+        (base) after to show the Rec.709 result."""
         looked = apply_cube(self._still, final)
         if self._placement_key() == "between" and self._look_samples is not None:
             looked = apply_cube(looked, self._base)
         return looked
 
+    def _rebuild_preview_cache(self) -> None:
+        """Recompute the two endpoint preview images (heavy). Call when look / placement / still
+        changes — NOT on every strength tick."""
+        self._before_img = apply_cube(self._still, self._base)          # strength 0
+        self._prev_look_img = self._apply_to_still(self._final_at(1.0))  # strength 1
+
     def _render_preview(self) -> None:
+        s = self._strength_value()
+        after = (1.0 - s) * self._before_img + s * self._prev_look_img   # cheap lerp — instant
         self._show(self._before_lbl, self._before_img)
-        self._show(self._after_lbl, self._apply_to_still(self._final_samples()))
+        self._show(self._after_lbl, after)
 
     # — manual compute (Compute button only) —
     def _set_busy(self, on: bool) -> None:
@@ -346,7 +360,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._thread.start()
 
     def _refresh_preview(self) -> None:
-        """Preview-only change (placement / strength) — fast synchronous render, no look rebuild."""
+        """Preview-only change that alters the look image (placement / still) — rebuild the cached
+        endpoints, then render. (Strength does NOT call this; it just lerps.)"""
+        self._rebuild_preview_cache()
         self._render_preview()
 
     def _on_computed(self, result) -> None:
@@ -359,13 +375,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._look_samples = result
         self._dirty = False                       # look is now current
         self._compute_btn.setText("Compute preview")
-        self._render_preview()                    # fast synchronous apply to the still
+        self._rebuild_preview_cache()             # new look → recompute endpoints (once)
+        self._render_preview()
 
     def _show(self, lbl, img) -> None:
         lbl.setPixmap(_to_pixmap(img).scaledToWidth(
             _PREVIEW_W, QtCore.Qt.TransformationMode.SmoothTransformation))
 
     def _update_preview(self) -> None:
+        self._rebuild_preview_cache()
         self._render_preview()
 
     def _sync_controls(self) -> None:
@@ -382,7 +400,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_controls(); self._mark_dirty()
 
     def _on_placement(self, _=None) -> None:
-        self._render_preview()                    # preview-only, fast (re-assemble cached look)
+        self._refresh_preview()                   # changes the look image → rebuild endpoints (once)
 
     def _on_tone(self, _=None) -> None:
         self._tone_lbl.setText(f"Tone (exposure match): {self._tone_value():.2f}")
@@ -390,7 +408,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_strength(self, _=None) -> None:
         self._strength_lbl.setText(f"Strength: {self._strength_value():.2f}")
-        self._render_preview()                    # preview-only, fast (strength is a blend)
+        self._render_preview()                    # cheap lerp between cached endpoints — instant
 
     def _add(self, title, store, listw) -> None:
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, title, "", _IMG_FILTER)
@@ -423,8 +441,7 @@ class MainWindow(QtWidgets.QMainWindow):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load DWG/DI preview still", "", _IMG_FILTER)
         if path:
             self._still = load_preview_still(path)
-            self._before_img = apply_cube(self._still, self._base)   # base-converted still ("before")
-            self._render_preview()                   # show immediately — no look compute, no spinner
+            self._refresh_preview()                  # rebuild endpoints for the new still + render
 
     def _export(self) -> None:
         if self._look_samples is None and self._has_inputs():
