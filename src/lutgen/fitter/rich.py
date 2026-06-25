@@ -139,7 +139,9 @@ class RichFitter:
             raise ValueError(f"space must be 'oklab' or 'rgb', got {space!r}")
         if method not in ("mkl", "pdf"):
             raise ValueError(f"method must be 'mkl' or 'pdf', got {method!r}")
-        self._space = space
+        # mkl in Oklab clips/hue-rotates badly on strong looks (the a/b axes blow out of gamut),
+        # so mkl is forced to RGB. Oklab is for pdf, where it helps.
+        self._space = "rgb" if method == "mkl" else space
         self._method = method
         self._iters = int(iterations)
         self._smoothing = float(smoothing)

@@ -452,6 +452,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _sync_controls(self) -> None:
         self._pages.setCurrentIndex(1 if self._is_pairs() else 0)
+        # mkl is forced to RGB (Oklab clips); show that by disabling Space under mkl.
+        self._space.setEnabled(self._method.currentText() != "mkl")
 
     # — slots (no auto-compute; everything just marks "changes pending") —
     def _on_mode(self, _=None) -> None:
