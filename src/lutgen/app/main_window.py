@@ -25,10 +25,10 @@ from lutgen.engine.strength import blend
 from lutgen.fitter.mid import MidFitter
 from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.consensus import build_consensus
-from lutgen.orchestration.ingest import load_image
+from lutgen.orchestration.ingest import load_references
 from lutgen.orchestration.pipeline import _assemble
 from lutgen.orchestration.preset import save_preset
-from lutgen.orchestration.stats import compute_stats
+from lutgen.orchestration.stats import compute_stats_batch
 
 from .preview import load_preview_still, make_test_still
 
@@ -316,18 +316,19 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_look(self, snap, report) -> np.ndarray | None:
         fitter = self._make_fitter(snap["fitter"], snap["method"], snap["space"], snap["tone"])
 
-        def _stats(paths, lo, hi):
-            stats = []
-            for i, p in enumerate(paths):
-                stats.append(compute_stats(load_image(p)))
-                report(lo + int((hi - lo) * (i + 1) / len(paths)))
-            return stats
+        def _stats(paths, hi):                  # parallel load + parallel stats (numpy frees GIL)
+            report(5)
+            imgs = load_references(paths)
+            report((5 + hi) // 2)
+            s = compute_stats_batch(imgs)
+            report(hi)
+            return s
 
         if snap["pairs"]:
             if not snap["before"] or not snap["after"]:
                 return None
-            consensus = build_consensus(_stats(snap["after"], 5, 30))
-            src = np.concatenate([load_image(p).reshape(-1, 3) for p in snap["before"]])
+            consensus = build_consensus(_stats(snap["after"], 30))
+            src = np.concatenate([i.reshape(-1, 3) for i in load_references(snap["before"])])
             if src.shape[0] > 200_000:
                 src = src[np.random.default_rng(0).choice(src.shape[0], 200_000, replace=False)]
             report(40)
@@ -335,7 +336,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             if not snap["refs"]:
                 return None
-            consensus = build_consensus(_stats(snap["refs"], 5, 40))
+            consensus = build_consensus(_stats(snap["refs"], 40))
             look = fitter.fit(consensus)
         report(60)
         return look(self._base)
