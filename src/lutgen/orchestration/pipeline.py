@@ -22,7 +22,7 @@ from lutgen.engine.grid import identity_grid
 from lutgen.engine.regularize import regularize
 from lutgen.engine.strength import blend
 from lutgen.fitter.interface import LookFitter
-from lutgen.fitter.mid import MidFitter
+from lutgen.fitter.rich import RichFitter
 
 from .consensus import build_consensus
 from .ingest import load_references
@@ -63,7 +63,7 @@ def render_cube(
     """
     base = load_base(size)
     if ref_paths:
-        fitter = fitter or MidFitter()
+        fitter = fitter or RichFitter()
         images = load_references(ref_paths, max_dim=max_dim)
         consensus = build_consensus(compute_stats_batch(images))
         looked = fitter.fit(consensus)(base)
@@ -97,7 +97,7 @@ def render_cube_dual(
     distribution onto the target's, calibrated on real neutral footage rather than a uniform source.
     Learned transform is applied to the protected base, then blended. `strength = 0` returns the base.
     """
-    fitter = fitter or MidFitter()
+    fitter = fitter or RichFitter()
     base = load_base(size)
 
     targets = load_references(target_paths, max_dim=max_dim)
