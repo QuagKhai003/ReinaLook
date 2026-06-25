@@ -44,8 +44,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="tonal/exposure match 0..1 (lower preserves your footage brightness)")
     r.add_argument("--space", choices=["oklab", "rgb"], default="oklab",
                    help="rich transport space (default oklab, perceptual)")
-    r.add_argument("--method", choices=["mkl", "pdf"], default="mkl",
-                   help="rich OT method: mkl (mean+cov) or pdf (Pitié IDT, full distribution)")
+    r.add_argument("--method", choices=["pdf", "mkl"], default="pdf",
+                   help="rich OT method: pdf (Pitié IDT, full distribution — best, default) or mkl (mean+cov, faster but can clip on strong looks)")
     r.add_argument("--placement", choices=["node2", "between"], default="node2",
                    help="node2: replace Node 2 (DWG/DI->Rec.709+look); between: DWG/DI look between Node 1&2")
     # creative adjustments (baked on top of the look; all default 0 = off; refs optional)

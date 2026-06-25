@@ -151,7 +151,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # fitter controls (references mode)
         self._fitter = QtWidgets.QComboBox(); self._fitter.addItems(["Rich", "Mid"])
-        self._method = QtWidgets.QComboBox(); self._method.addItems(["mkl", "pdf"])
+        self._method = QtWidgets.QComboBox(); self._method.addItems(["pdf", "mkl"])  # pdf = best, default
         self._space = QtWidgets.QComboBox(); self._space.addItems(["oklab", "rgb"])
         self._placement = QtWidgets.QComboBox()
         self._placement.addItems(["Replace CSTout", "Between CSTs"])

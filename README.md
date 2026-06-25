@@ -116,7 +116,8 @@ reinalook-gui          # or:  python -m lutgen.app
    - **Placement:** `Replace CSTout` (most accurate — swaps your Node 2) or `Between CSTs` (sits
      between Node 1 and Node 2, keeps both).
    - **Fitter:** `Rich` (recommended) or `Mid` (simple).
-   - **Method:** `mkl` (palette) or `pdf` (richest, full distribution).
+   - **Method:** `pdf` (best — full-distribution transfer, smooth, default) or `mkl` (faster, but
+     can clip/look harsh on strong looks). Use `mkl` for quick iteration, `pdf` for the final look.
    - **Space:** `oklab` (perceptual, recommended) or `rgb`.
 5. **Set the dials:**
    - **Tone** — lower keeps your footage's brightness; higher also matches the references' exposure.
