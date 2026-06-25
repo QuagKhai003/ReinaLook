@@ -26,7 +26,7 @@ from lutgen.fitter.mid import MidFitter
 
 from .consensus import build_consensus
 from .ingest import load_references
-from .stats import compute_stats
+from .stats import compute_stats_batch
 
 
 def _assemble(looked_full: np.ndarray, strength: float, placement: str, size: int) -> np.ndarray:
@@ -65,7 +65,7 @@ def render_cube(
     if ref_paths:
         fitter = fitter or MidFitter()
         images = load_references(ref_paths, max_dim=max_dim)
-        consensus = build_consensus([compute_stats(img) for img in images])
+        consensus = build_consensus(compute_stats_batch(images))
         looked = fitter.fit(consensus)(base)
     else:
         looked = base.copy()                 # manual-only: adjustments over the base
@@ -101,7 +101,7 @@ def render_cube_dual(
     base = load_base(size)
 
     targets = load_references(target_paths, max_dim=max_dim)
-    consensus = build_consensus([compute_stats(img) for img in targets])
+    consensus = build_consensus(compute_stats_batch(targets))
 
     sources = load_references(source_paths, max_dim=max_dim)
     source_pixels = np.concatenate([img.reshape(-1, 3) for img in sources])

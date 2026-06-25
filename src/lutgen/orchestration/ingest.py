@@ -41,8 +41,13 @@ def load_image(path: str | Path, max_dim: int | None = 1024) -> np.ndarray:
 
 
 def load_references(paths, max_dim: int | None = 1024) -> list[np.ndarray]:
-    """Load multiple reference images. Raises if the list is empty."""
+    """Load multiple reference images (decoded in parallel — Pillow releases the GIL). Order is
+    preserved; results are identical to a serial load. Raises if the list is empty."""
     paths = list(paths)
     if not paths:
         raise ValueError("need at least one reference image")
-    return [load_image(p, max_dim=max_dim) for p in paths]
+    if len(paths) == 1:
+        return [load_image(paths[0], max_dim=max_dim)]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(len(paths), 8)) as ex:
+        return list(ex.map(lambda p: load_image(p, max_dim=max_dim), paths))

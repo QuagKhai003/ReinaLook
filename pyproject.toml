@@ -12,6 +12,7 @@ dependencies = [
     "scipy>=1.11",
     "colour-science>=0.4.7",
     "pillow>=10",
+    "threadpoolctl>=3",
 ]
 
 [project.optional-dependencies]
