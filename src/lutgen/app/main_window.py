@@ -125,8 +125,8 @@ class MainWindow(QtWidgets.QMainWindow):
         after_rm = QtWidgets.QPushButton("Remove selected graded")
         before_add.clicked.connect(self._add_before)
         after_add.clicked.connect(self._add_after)
-        before_rm.clicked.connect(lambda: self._remove(self._before, self._before_list))
-        after_rm.clicked.connect(lambda: self._remove(self._after, self._after_list))
+        before_rm.clicked.connect(self._remove_before)
+        after_rm.clicked.connect(self._remove_after)
         pairs_page = QtWidgets.QWidget()
         pl = QtWidgets.QVBoxLayout(pairs_page)
         pl.setContentsMargins(0, 0, 0, 0)
@@ -509,8 +509,14 @@ class MainWindow(QtWidgets.QMainWindow):
             listw.takeItem(listw.row(item))
         self._mark_dirty()
 
-    def _remove_refs(self) -> None:
+    def _remove_refs(self, _=None) -> None:
         self._remove(self._refs, self._refs_list)
+
+    def _remove_before(self, _=None) -> None:
+        self._remove(self._before, self._before_list)
+
+    def _remove_after(self, _=None) -> None:
+        self._remove(self._after, self._after_list)
 
     def _load_still(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load DWG/DI preview still", "", _IMG_FILTER)
