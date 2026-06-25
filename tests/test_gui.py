@@ -118,6 +118,20 @@ def test_refresh_renders_still_even_with_refs_pending(app, tmp_path):
     w.close()
 
 
+def test_remove_in_neutral_graded_mode(app):
+    from lutgen.app.main_window import MainWindow
+
+    w = MainWindow()
+    w._mode.setCurrentIndex(1)                       # Neutral + Graded
+    w._before = ["a.png", "b.png"]
+    w._before_list.addItems(w._before)
+    w._before_list.item(0).setSelected(True)
+    w._remove_before()                              # was a no-op (lambda/bool bug)
+    assert w._before == ["b.png"]
+    assert w._before_list.count() == 1
+    w.close()
+
+
 def test_adjustments_manual_grade_no_refs(app):
     from lutgen.app.main_window import MainWindow
 
