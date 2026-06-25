@@ -26,7 +26,6 @@ from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.consensus import build_consensus
 from lutgen.orchestration.ingest import load_references
 from lutgen.orchestration.pipeline import _assemble
-from lutgen.orchestration.preset import save_preset
 from lutgen.orchestration.stats import compute_stats_batch
 
 from .preview import load_preview_still, make_test_still
@@ -86,7 +85,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._prev_look_img = self._before_img                   # preview at strength 1 (no look yet)
         self._look_samples: np.ndarray | None = None
         self._adj = Adjustments()                                # creative adjustments (manual grade)
-        self._refs: list[str] = []
         self._before: list[str] = []
         self._after: list[str] = []
 
@@ -101,30 +99,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._preview_timer.timeout.connect(self._do_refresh)
 
         self._build_ui()
-        self._sync_controls()
         self._update_preview()
 
     # — UI —
     def _build_ui(self) -> None:
-        self._mode = QtWidgets.QComboBox()
-        self._mode.addItems(["References (graded only)", "Neutral + Graded (unpaired)"])
-        self._mode.currentIndexChanged.connect(self._on_mode)
-
-        # references page
-        self._refs_list = _file_list()
-        refs_add = QtWidgets.QPushButton("+ Add references…")
-        refs_rm = QtWidgets.QPushButton("Remove selected")
-        refs_add.clicked.connect(self._add_refs)
-        refs_rm.clicked.connect(self._remove_refs)
-        refs_page = QtWidgets.QWidget()
-        rl = QtWidgets.QVBoxLayout(refs_page)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.addWidget(QtWidgets.QLabel("Reference images (the target look)"))
-        rl.addWidget(self._refs_list)
-        rl.addWidget(refs_add)
-        rl.addWidget(refs_rm)
-
-        # pairs page
+        # Neutral + Graded (unpaired) is the only mode.
         self._before_list = _file_list()
         self._after_list = _file_list()
         before_add = QtWidgets.QPushButton("+ Add NEUTRAL (your footage)…")
@@ -146,16 +125,14 @@ class MainWindow(QtWidgets.QMainWindow):
         pl.addWidget(self._after_list)
         pl.addWidget(after_add)
         pl.addWidget(after_rm)
-        hint = QtWidgets.QLabel("Unpaired pools — different scenes/lighting OK, counts need not "
-                                "match. Transports your neutral colors toward the graded look. "
-                                "Fitter/Method/Space/Tone all apply.")
+        hint = QtWidgets.QLabel("Add some NEUTRAL frames (your ungraded footage) and some GRADED "
+                                "frames (the look). Different scenes/lighting OK; counts need not "
+                                "match. Transports your neutral colors toward the graded look.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         pl.addWidget(hint)
 
-        self._pages = QtWidgets.QStackedWidget()
-        self._pages.addWidget(refs_page)
-        self._pages.addWidget(pairs_page)
+        self._pairs_page = pairs_page
 
         # look engine is fixed: Rich / pdf / Oklab (the best, only combination).
         self._placement = QtWidgets.QComboBox()
@@ -176,14 +153,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._compute_btn.setStyleSheet("font-weight: bold; padding: 6px;")
         self._compute_btn.clicked.connect(self._launch_compute)
         export_btn = QtWidgets.QPushButton("Export .cube…")
-        preset_btn = QtWidgets.QPushButton("Save preset…")
         export_btn.clicked.connect(self._export)
-        preset_btn.clicked.connect(self._save_preset)
 
         left = QtWidgets.QVBoxLayout()
-        left.addWidget(QtWidgets.QLabel("Mode"))
-        left.addWidget(self._mode)
-        left.addWidget(self._pages)
+        left.addWidget(self._pairs_page)
         left.addSpacing(8)
         left.addLayout(form)
         left.addWidget(self._tone_lbl)
@@ -194,7 +167,6 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addStretch(1)
         left.addWidget(self._compute_btn)
         left.addWidget(export_btn)
-        left.addWidget(preset_btn)
 
         self._before_lbl = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
         self._after_lbl = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -294,38 +266,22 @@ class MainWindow(QtWidgets.QMainWindow):
     def _strength_value(self) -> float:
         return self._strength.value() / 100.0
 
-    def _is_pairs(self) -> bool:
-        return self._mode.currentIndex() == 1
-
     def _has_inputs(self) -> bool:
-        return (self._before and self._after) if self._is_pairs() else bool(self._refs)
+        return bool(self._before and self._after)
 
     # — building the look (pure; safe to run off the UI thread) —
     def _build_look(self, snap, report) -> np.ndarray | None:
-        fitter = RichFitter(tone_strength=snap["tone"])   # fixed: Rich / pdf / Oklab
-
-        def _stats(paths, hi):                  # parallel load + parallel stats (numpy frees GIL)
-            report(5)
-            imgs = load_references(paths)
-            report((5 + hi) // 2)
-            s = compute_stats_batch(imgs)
-            report(hi)
-            return s
-
-        if snap["pairs"]:
-            if not snap["before"] or not snap["after"]:
-                return None
-            consensus = build_consensus(_stats(snap["after"], 30))
-            src = np.concatenate([i.reshape(-1, 3) for i in load_references(snap["before"])])
-            if src.shape[0] > 200_000:
-                src = src[np.random.default_rng(0).choice(src.shape[0], 200_000, replace=False)]
-            report(40)
-            look = fitter.fit(consensus, source_samples=src)
-        else:
-            if not snap["refs"]:
-                return None
-            consensus = build_consensus(_stats(snap["refs"], 40))
-            look = fitter.fit(consensus)
+        # Neutral + Graded: transport the neutral pool toward the graded pool (Rich / pdf / Oklab).
+        if not snap["before"] or not snap["after"]:
+            return None
+        report(5)
+        consensus = build_consensus(compute_stats_batch(load_references(snap["after"])))
+        report(30)
+        src = np.concatenate([i.reshape(-1, 3) for i in load_references(snap["before"])])
+        if src.shape[0] > 200_000:
+            src = src[np.random.default_rng(0).choice(src.shape[0], 200_000, replace=False)]
+        report(45)
+        look = RichFitter(tone_strength=snap["tone"]).fit(consensus, source_samples=src)
         report(60)
         return look(self._base)
 
@@ -351,8 +307,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _snapshot(self, refit: bool) -> dict:
         return dict(
-            refit=refit, pairs=self._is_pairs(), refs=list(self._refs),
-            before=list(self._before), after=list(self._after),
+            refit=refit, before=list(self._before), after=list(self._after),
             tone=self._tone_value(),
             strength=self._strength_value(), still=self._still, placement=self._placement_key(),
             still_dirty=self._still_dirty, look=self._look_samples,
@@ -399,8 +354,6 @@ class MainWindow(QtWidgets.QMainWindow):
         for cls in (QtWidgets.QComboBox, QtWidgets.QSlider, QtWidgets.QPushButton, QtWidgets.QListWidget):
             for w in self._central.findChildren(cls):
                 w.setEnabled(on)
-        if on:
-            self._sync_controls()                 # restore method/space enabled-state
 
     def _mark_dirty(self) -> None:
         self._dirty = True
@@ -449,13 +402,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._rebuild_preview_cache()
         self._render_preview()
 
-    def _sync_controls(self) -> None:
-        self._pages.setCurrentIndex(1 if self._is_pairs() else 0)
-
     # — slots (no auto-compute; everything just marks "changes pending") —
-    def _on_mode(self, _=None) -> None:
-        self._sync_controls(); self._mark_dirty()
-
     def _on_placement(self, _=None) -> None:
         self._refresh_preview()                   # changes the look image → rebuild endpoints (once)
 
@@ -475,9 +422,6 @@ class MainWindow(QtWidgets.QMainWindow):
             listw.addItems(new)
             self._mark_dirty()
 
-    def _add_refs(self) -> None:
-        self._add("Add references", self._refs, self._refs_list)
-
     def _add_before(self) -> None:
         self._add("Add NEUTRAL (your footage) frames", self._before, self._before_list)
 
@@ -490,9 +434,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 store.remove(item.text())
             listw.takeItem(listw.row(item))
         self._mark_dirty()
-
-    def _remove_refs(self, _=None) -> None:
-        self._remove(self._refs, self._refs_list)
 
     def _remove_before(self, _=None) -> None:
         self._remove(self._before, self._before_list)
@@ -516,11 +457,9 @@ class MainWindow(QtWidgets.QMainWindow):
             finally:
                 self._set_busy(False)
         if self._look_samples is None and self._adj.is_identity():
-            if self._is_pairs():
-                msg = (f"Add NEUTRAL and GRADED images first — now {len(self._before)} neutral, "
-                       f"{len(self._after)} graded (need at least one of each).")
-            else:
-                msg = "Add reference images, or open Adjustments to make a manual grade."
+            msg = (f"Add NEUTRAL and GRADED images first — now {len(self._before)} neutral, "
+                   f"{len(self._after)} graded (need at least one of each), "
+                   f"or open Adjustments to make a manual grade.")
             QtWidgets.QMessageBox.warning(self, "ReinaLook", msg)
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export .cube", "look.cube", "Cube (*.cube)")
@@ -533,10 +472,3 @@ class MainWindow(QtWidgets.QMainWindow):
             self._thread.wait(3000)
         super().closeEvent(event)
 
-    def _save_preset(self) -> None:
-        if self._is_pairs():
-            QtWidgets.QMessageBox.information(self, "ReinaLook", "Presets apply to References mode.")
-            return
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save preset", "look.json", "JSON (*.json)")
-        if path:
-            save_preset(path, self._refs, self._strength_value(), title="ReinaLook")
