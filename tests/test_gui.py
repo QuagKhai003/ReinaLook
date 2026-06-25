@@ -41,15 +41,15 @@ def test_window_builds_and_previews(app):
     w.close()
 
 
-def test_mode_and_method_controls(app):
+def test_mode_and_placement_controls(app):
     from lutgen.app.main_window import MainWindow
 
     w = MainWindow()
-    w._method.setCurrentText("mkl"); _drain(app, w)
-    w._method.setCurrentText("pdf"); w._space.setCurrentText("rgb"); _drain(app, w)
+    w._placement.setCurrentIndex(1); _drain(app, w)             # Between CSTs
+    w._placement.setCurrentIndex(0); _drain(app, w)             # Replace CSTout
     np.testing.assert_array_equal(w._final_samples(), w._base)   # no refs → base
     w._mode.setCurrentIndex(1); _drain(app, w)                   # Neutral+Graded pools
-    assert w._is_pairs() and w._method.isEnabled()
+    assert w._is_pairs() and w._placement.isEnabled()
     assert w._final_samples().shape == (274625, 3)
     w.close()
 
@@ -67,13 +67,12 @@ def test_threaded_compute_builds_look(app, tmp_path):
         Image.fromarray((img * 255).astype(np.uint8), "RGB").save(p)
         paths.append(str(p))
     w = MainWindow()
-    w._method.setCurrentText("mkl")           # faster for the plumbing test
     w._refs = paths
     w._refs_list.addItems(paths)
     w._launch_compute()           # Compute button → off-thread build + spinner; grays controls
-    assert not w._method.isEnabled()          # controls disabled during compute
+    assert not w._placement.isEnabled()       # controls disabled during compute
     _drain(app, w)
-    assert w._method.isEnabled()              # re-enabled when done
+    assert w._placement.isEnabled()           # re-enabled when done
     assert w._look_samples is not None and w._look_samples.shape == (274625, 3)
     w.close()
 
@@ -91,10 +90,9 @@ def test_placement_switch_refreshes_preview_without_dirty(app, tmp_path):
         Image.fromarray((img * 255).astype(np.uint8), "RGB").save(p)
         paths.append(str(p))
     w = MainWindow()
-    w._method.setCurrentText("mkl")                   # faster for the plumbing test
     w._refs = paths
     w._refs_list.addItems(paths)
-    w._launch_compute(); _drain(app, w)               # compute the look
+    w._launch_compute(); _drain(app, w)               # compute the look (pdf default)
     assert w._look_samples is not None and not w._dirty
     look_before = w._look_samples
     w._placement.setCurrentIndex(1)                   # switch to "between" → preview-only refresh

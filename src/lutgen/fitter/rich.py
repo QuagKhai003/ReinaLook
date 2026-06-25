@@ -132,7 +132,7 @@ class RichFitter:
     ``space`` = "oklab" (default, perceptual) or "rgb". ``tone_strength`` (0..1) preserves input
     lightness while keeping the transported palette (lower = keep brightness)."""
 
-    def __init__(self, tone_strength: float = 1.0, space: str = "oklab", method: str = "mkl",
+    def __init__(self, tone_strength: float = 1.0, space: str = "oklab", method: str = "pdf",
                  iterations: int = 16, smoothing: float = 0.025, size: int = DEFAULT_SIZE):
         self._tone = float(np.clip(tone_strength, 0.0, 1.0))
         if space not in ("oklab", "rgb"):
