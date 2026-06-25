@@ -22,7 +22,7 @@ def app():
 
 def _drain(app, w):
     """Let any background compute thread finish (offscreen)."""
-    for _ in range(100):
+    for _ in range(600):                 # up to ~30s — pdf (default) is slower than mkl
         app.processEvents()
         if w._thread is None or not w._thread.isRunning():
             break
@@ -41,16 +41,15 @@ def test_window_builds_and_previews(app):
     w.close()
 
 
-def test_mode_and_fitter_controls(app):
+def test_mode_and_method_controls(app):
     from lutgen.app.main_window import MainWindow
 
     w = MainWindow()
-    w._fitter.setCurrentText("Mid"); _drain(app, w)
-    w._fitter.setCurrentText("Rich"); w._method.setCurrentText("pdf"); _drain(app, w)
-    w._space.setCurrentText("rgb"); _drain(app, w)
+    w._method.setCurrentText("mkl"); _drain(app, w)
+    w._method.setCurrentText("pdf"); w._space.setCurrentText("rgb"); _drain(app, w)
     np.testing.assert_array_equal(w._final_samples(), w._base)   # no refs → base
     w._mode.setCurrentIndex(1); _drain(app, w)                   # Neutral+Graded pools
-    assert w._is_pairs() and w._fitter.isEnabled()
+    assert w._is_pairs() and w._method.isEnabled()
     assert w._final_samples().shape == (274625, 3)
     w.close()
 
@@ -68,12 +67,13 @@ def test_threaded_compute_builds_look(app, tmp_path):
         Image.fromarray((img * 255).astype(np.uint8), "RGB").save(p)
         paths.append(str(p))
     w = MainWindow()
+    w._method.setCurrentText("mkl")           # faster for the plumbing test
     w._refs = paths
     w._refs_list.addItems(paths)
     w._launch_compute()           # Compute button → off-thread build + spinner; grays controls
-    assert not w._fitter.isEnabled()          # controls disabled during compute
+    assert not w._method.isEnabled()          # controls disabled during compute
     _drain(app, w)
-    assert w._fitter.isEnabled()              # re-enabled when done
+    assert w._method.isEnabled()              # re-enabled when done
     assert w._look_samples is not None and w._look_samples.shape == (274625, 3)
     w.close()
 
@@ -91,6 +91,7 @@ def test_placement_switch_refreshes_preview_without_dirty(app, tmp_path):
         Image.fromarray((img * 255).astype(np.uint8), "RGB").save(p)
         paths.append(str(p))
     w = MainWindow()
+    w._method.setCurrentText("mkl")                   # faster for the plumbing test
     w._refs = paths
     w._refs_list.addItems(paths)
     w._launch_compute(); _drain(app, w)               # compute the look

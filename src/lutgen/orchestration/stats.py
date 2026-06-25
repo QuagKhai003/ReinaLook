@@ -105,15 +105,7 @@ def _subsample(x: np.ndarray, cap: int) -> np.ndarray:
 
 
 def compute_stats_batch(images) -> list:
-    """``compute_stats`` over several images in parallel — bit-for-bit identical to serial, just
-    faster. numpy releases the GIL; we pin BLAS to 1 thread per worker (threadpoolctl) so the
-    per-call BLAS threads don't oversubscribe and crash (OpenBLAS nested-threading segfault)."""
-    images = list(images)
-    if len(images) <= 1:
-        return [compute_stats(i) for i in images]
-    from concurrent.futures import ThreadPoolExecutor
-
-    from threadpoolctl import threadpool_limits
-    with threadpool_limits(limits=1, user_api="blas"):
-        with ThreadPoolExecutor(max_workers=min(len(images), 8)) as ex:
-            return list(ex.map(compute_stats, images))
+    """``compute_stats`` over several images, serial. (Threading the BLAS-heavy stats — np.cov /
+    matmul — can intermittently segfault via OpenBLAS even with the thread cap, so we keep it
+    serial for stability. The parallel image DECODE in ingest is BLAS-free and safe.)"""
+    return [compute_stats(i) for i in images]

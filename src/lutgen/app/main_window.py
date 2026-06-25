@@ -22,7 +22,6 @@ from lutgen.engine.base import DEFAULT_SIZE, load_base
 from lutgen.engine.cube_io import write_cube
 from lutgen.engine.regularize import regularize
 from lutgen.engine.strength import blend
-from lutgen.fitter.mid import MidFitter
 from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.consensus import build_consensus
 from lutgen.orchestration.ingest import load_references
@@ -149,13 +148,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pages.addWidget(refs_page)
         self._pages.addWidget(pairs_page)
 
-        # fitter controls (references mode)
-        self._fitter = QtWidgets.QComboBox(); self._fitter.addItems(["Rich", "Mid"])
+        # look controls (references mode) — single optimal-transport fitter (Rich)
         self._method = QtWidgets.QComboBox(); self._method.addItems(["pdf", "mkl"])  # pdf = best, default
         self._space = QtWidgets.QComboBox(); self._space.addItems(["oklab", "rgb"])
         self._placement = QtWidgets.QComboBox()
         self._placement.addItems(["Replace CSTout", "Between CSTs"])
-        for c in (self._fitter, self._method, self._space):
+        for c in (self._method, self._space):
             c.currentIndexChanged.connect(self._on_fitter_changed)
         self._placement.currentIndexChanged.connect(self._on_placement)
 
@@ -166,7 +164,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         form = QtWidgets.QFormLayout()
         form.addRow("Placement", self._placement)
-        form.addRow("Fitter", self._fitter)
         form.addRow("Method", self._method)
         form.addRow("Space", self._space)
 
@@ -297,24 +294,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _is_pairs(self) -> bool:
         return self._mode.currentIndex() == 1
 
-    def _build_fitter(self):
-        tone = self._tone_value()
-        if self._fitter.currentText() == "Mid":
-            return MidFitter(tone_strength=tone)
-        return RichFitter(tone_strength=tone, space=self._space.currentText(),
-                          method=self._method.currentText())
-
     def _has_inputs(self) -> bool:
         return (self._before and self._after) if self._is_pairs() else bool(self._refs)
 
-    def _make_fitter(self, fitter, method, space, tone):
-        if fitter == "Mid":
-            return MidFitter(tone_strength=tone)
+    def _make_fitter(self, method, space, tone):
         return RichFitter(tone_strength=tone, space=space, method=method)
 
     # — building the look (pure; safe to run off the UI thread) —
     def _build_look(self, snap, report) -> np.ndarray | None:
-        fitter = self._make_fitter(snap["fitter"], snap["method"], snap["space"], snap["tone"])
+        fitter = self._make_fitter(snap["method"], snap["space"], snap["tone"])
 
         def _stats(paths, hi):                  # parallel load + parallel stats (numpy frees GIL)
             report(5)
@@ -365,7 +353,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return dict(
             refit=refit, pairs=self._is_pairs(), refs=list(self._refs),
             before=list(self._before), after=list(self._after),
-            fitter=self._fitter.currentText(), method=self._method.currentText(),
+            method=self._method.currentText(),
             space=self._space.currentText(), tone=self._tone_value(),
             strength=self._strength_value(), still=self._still, placement=self._placement_key(),
             still_dirty=self._still_dirty, look=self._look_samples,
@@ -463,10 +451,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._render_preview()
 
     def _sync_controls(self) -> None:
-        rich = self._fitter.currentText() == "Rich"
         self._pages.setCurrentIndex(1 if self._is_pairs() else 0)
-        self._method.setEnabled(rich)
-        self._space.setEnabled(rich)
 
     # — slots (no auto-compute; everything just marks "changes pending") —
     def _on_mode(self, _=None) -> None:

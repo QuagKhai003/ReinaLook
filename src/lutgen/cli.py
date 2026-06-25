@@ -16,7 +16,6 @@ import sys
 
 from lutgen.engine.adjust import Adjustments
 from lutgen.engine.cube_io import write_cube
-from lutgen.fitter.mid import MidFitter
 from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.pipeline import (
     render_cube,
@@ -25,7 +24,6 @@ from lutgen.orchestration.pipeline import (
 )
 from lutgen.orchestration.preset import load_preset, save_preset
 
-_FITTERS = {"mid": MidFitter, "rich": RichFitter}
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -39,7 +37,6 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--strength", type=float, default=None, help="look strength 0..1 (default 1.0)")
     r.add_argument("--out", "-o", required=True, help="output .cube path")
     r.add_argument("--title", default=None, help="cube TITLE")
-    r.add_argument("--fitter", choices=list(_FITTERS), default="rich", help="look fitter (default rich)")
     r.add_argument("--tone", type=float, default=None,
                    help="tonal/exposure match 0..1 (lower preserves your footage brightness)")
     r.add_argument("--space", choices=["oklab", "rgb"], default="oklab",
@@ -99,11 +96,10 @@ def _cmd_render(args: argparse.Namespace) -> int:
         print("error: nothing to do — pass --refs, --preset, or some --contrast/--saturation/…",
               file=sys.stderr)
         return 2
-    kwargs = {} if args.tone is None else {"tone_strength": args.tone}
-    if args.fitter == "rich":
-        kwargs["space"] = args.space
-        kwargs["method"] = args.method
-    fitter = _FITTERS[args.fitter](**kwargs)
+    kwargs = {"space": args.space, "method": args.method}
+    if args.tone is not None:
+        kwargs["tone_strength"] = args.tone
+    fitter = RichFitter(**kwargs)
     if args.source:                       # unpaired neutral→graded transport (ADR-0016)
         cube = render_cube_dual(args.source, refs, strength, fitter=fitter, title=title,
                                 placement=args.placement, adjust=adjust, max_dim=args.max_dim)
@@ -116,7 +112,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
     if args.save_preset:
         save_preset(args.save_preset, refs, strength, title)
     where = "between Node 1&2" if args.placement == "between" else "replace Node 2"
-    print(f"wrote {args.out}  ({where}, {args.fitter} fitter, {note}, strength {strength})")
+    print(f"wrote {args.out}  ({where}, rich {args.method}/{args.space}, {note}, strength {strength})")
     return 0
 
 
