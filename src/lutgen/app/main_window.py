@@ -87,6 +87,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._dirty = False             # settings changed since last compute
         self._thread: _ComputeThread | None = None
 
+        # debounce the (heavier) preview-endpoint rebuild used by adjustments/placement/still —
+        # rebuilding the look cube per slider tick lagged; fire ~180ms after the last change.
+        self._preview_timer = QtCore.QTimer(self, singleShot=True, interval=180)
+        self._preview_timer.timeout.connect(self._do_refresh)
+
         self._build_ui()
         self._sync_controls()
         self._update_preview()
@@ -219,8 +224,13 @@ class MainWindow(QtWidgets.QMainWindow):
         preview.addWidget(self._after_lbl, 1)
 
         root = QtWidgets.QHBoxLayout()
-        lw = QtWidgets.QWidget(); lw.setLayout(left); lw.setMaximumWidth(340)
-        root.addWidget(lw)
+        lw = QtWidgets.QWidget(); lw.setLayout(left)
+        scroll = QtWidgets.QScrollArea()         # left controls scroll if taller than the window
+        scroll.setWidget(lw)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(360); scroll.setMaximumWidth(380)
+        root.addWidget(scroll)
         root.addLayout(preview, 1)
         self._central = QtWidgets.QWidget(); self._central.setLayout(root)
         self.setCentralWidget(self._central)
@@ -422,8 +432,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._thread.start()
 
     def _refresh_preview(self) -> None:
-        """Preview-only change that alters the look image (placement / still) — rebuild the cached
-        endpoints, then render. (Strength does NOT call this; it just lerps.)"""
+        """Preview-only change that alters the look image (adjustments / placement / still). Rebuilds
+        the cached endpoints — debounced, since that re-derives the look cube (heavy for 'between')."""
+        self._preview_timer.start()
+
+    def _do_refresh(self) -> None:
         self._rebuild_preview_cache()
         self._render_preview()
 
