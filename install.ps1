@@ -20,7 +20,9 @@ $asset = $rel.assets | Where-Object { $_.name -eq 'ReinaLook.exe' } | Select-Obj
 if (-not $asset) { throw "No 'ReinaLook.exe' asset found on the latest release of $Repo." }
 Write-Host "  release $($rel.tag_name)  ($([math]::Round($asset.size/1MB,1)) MB)"
 
-# 2) download into the install folder
+# 2) close any running instance so an update can overwrite the exe, then download
+Get-Process -Name 'ReinaLook' -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Milliseconds 500
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Write-Host "  downloading to $ExePath ..."
 Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile $ExePath
