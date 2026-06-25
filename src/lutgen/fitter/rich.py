@@ -80,15 +80,21 @@ def _cdf_match_1d(s: np.ndarray, t: np.ndarray) -> np.ndarray:
 
 def _idt(source: np.ndarray, target: np.ndarray, iterations: int, seed: int = 0) -> np.ndarray:
     """Pitié Iterated Distribution Transfer: transport ``source`` onto ``target``'s full
-    distribution via random rotations + per-axis 1D CDF matching."""
+    distribution via random rotations + per-axis 1D CDF matching. (Vectorized over the 3 axes;
+    bit-for-bit identical to the per-axis loop.)"""
     rng = np.random.default_rng(seed)
     s = source.copy()
+    s_pos = np.linspace(0.0, 1.0, s.shape[0])              # source rank positions (constant)
+    t_pos = np.linspace(0.0, 1.0, target.shape[0])         # target rank positions (constant)
     for _ in range(iterations):
         rot, _ = np.linalg.qr(rng.standard_normal((3, 3)))  # random orthonormal basis
         sr = s @ rot
-        tr = target @ rot
+        tr = np.sort(target @ rot, axis=0)                  # target sorted per axis, once
+        order = np.argsort(sr, axis=0)                      # one call for all 3 axes
         for ax in range(3):
-            sr[:, ax] = _cdf_match_1d(sr[:, ax], tr[:, ax])
+            ranks = np.empty(sr.shape[0])
+            ranks[order[:, ax]] = s_pos
+            sr[:, ax] = np.interp(ranks, t_pos, tr[:, ax])
         s = sr @ rot.T
     return s
 
