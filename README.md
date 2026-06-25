@@ -116,8 +116,6 @@ reinalook-gui          # or:  python -m lutgen.app
    - **Placement:** `Replace CSTout` (most accurate — swaps your Node 2) or `Between CSTs` (sits
      between Node 1 and Node 2, keeps both).
    - **Fitter:** `Rich` (recommended) or `Mid` (simple).
-   - **Method:** `pdf` (best — full-distribution transfer, smooth, default) or `mkl` (faster, but
-     can clip/look harsh on strong looks). Use `mkl` for quick iteration, `pdf` for the final look.
    - **Space:** `oklab` (perceptual, recommended) or `rgb`.
 5. **Set the dials:**
    - **Tone** — lower keeps your footage's brightness; higher also matches the references' exposure.
@@ -145,9 +143,8 @@ reinalook-gui          # or:  python -m lutgen.app
 
 ### Command line (optional, for power users)
 ```bash
-# References → look cube (Rich, Oklab, full distribution):
-reinalook render --refs r1.png r2.png r3.png --fitter rich --method pdf --space oklab ^
-                 --strength 0.8 --tone 0.5 --placement node2 --out look.cube
+# References → look cube:
+reinalook render --refs r1.png r2.png r3.png --strength 0.8 --tone 0.5 --placement node2 --out look.cube
 
 # Unpaired pools (your neutral footage + graded examples):
 reinalook render --source neutral1.png neutral2.png --refs graded1.png graded2.png --out look.cube

@@ -148,13 +148,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pages.addWidget(refs_page)
         self._pages.addWidget(pairs_page)
 
-        # look controls (references mode) — single optimal-transport fitter (Rich)
-        self._method = QtWidgets.QComboBox(); self._method.addItems(["pdf", "mkl"])  # pdf = best, default
-        self._space = QtWidgets.QComboBox(); self._space.addItems(["oklab", "rgb"])
+        # look engine is fixed: Rich / pdf / Oklab (the best, only combination).
         self._placement = QtWidgets.QComboBox()
         self._placement.addItems(["Replace CSTout", "Between CSTs"])
-        for c in (self._method, self._space):
-            c.currentIndexChanged.connect(self._on_fitter_changed)
         self._placement.currentIndexChanged.connect(self._on_placement)
 
         self._tone = self._slider(100, self._on_tone)
@@ -164,8 +160,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         form = QtWidgets.QFormLayout()
         form.addRow("Placement", self._placement)
-        form.addRow("Method", self._method)
-        form.addRow("Space", self._space)
 
         adjust_box = self._build_adjust_panel()
 
@@ -297,12 +291,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _has_inputs(self) -> bool:
         return (self._before and self._after) if self._is_pairs() else bool(self._refs)
 
-    def _make_fitter(self, method, space, tone):
-        return RichFitter(tone_strength=tone, space=space, method=method)
-
     # — building the look (pure; safe to run off the UI thread) —
     def _build_look(self, snap, report) -> np.ndarray | None:
-        fitter = self._make_fitter(snap["method"], snap["space"], snap["tone"])
+        fitter = RichFitter(tone_strength=snap["tone"])   # fixed: Rich / pdf / Oklab
 
         def _stats(paths, hi):                  # parallel load + parallel stats (numpy frees GIL)
             report(5)
@@ -353,8 +344,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return dict(
             refit=refit, pairs=self._is_pairs(), refs=list(self._refs),
             before=list(self._before), after=list(self._after),
-            method=self._method.currentText(),
-            space=self._space.currentText(), tone=self._tone_value(),
+            tone=self._tone_value(),
             strength=self._strength_value(), still=self._still, placement=self._placement_key(),
             still_dirty=self._still_dirty, look=self._look_samples,
         )
@@ -452,14 +442,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _sync_controls(self) -> None:
         self._pages.setCurrentIndex(1 if self._is_pairs() else 0)
-        # mkl is forced to RGB (Oklab clips); show that by disabling Space under mkl.
-        self._space.setEnabled(self._method.currentText() != "mkl")
 
     # — slots (no auto-compute; everything just marks "changes pending") —
     def _on_mode(self, _=None) -> None:
-        self._sync_controls(); self._mark_dirty()
-
-    def _on_fitter_changed(self, _=None) -> None:
         self._sync_controls(); self._mark_dirty()
 
     def _on_placement(self, _=None) -> None:

@@ -51,7 +51,7 @@ def test_identity_when_consensus_is_source():
     base = load_base()
     consensus = build_consensus([compute_stats(base)])
     for space in ("rgb", "oklab"):
-        out = RichFitter(space=space).fit(consensus, source_samples=base)(base)
+        out = RichFitter(space=space, method="mkl").fit(consensus, source_samples=base)(base)
         np.testing.assert_allclose(out, base, atol=2e-3)  # target==source → ~identity
 
 
@@ -59,7 +59,7 @@ def test_tone_zero_preserves_luma_rgb():
     base = load_base()
     w = np.array([0.2126, 0.7152, 0.0722])
     consensus = build_consensus([compute_stats(r) for r in _warm_refs()])
-    out = RichFitter(tone_strength=0.0, space="rgb").fit(consensus)(base)
+    out = RichFitter(tone_strength=0.0, space="rgb", method="mkl").fit(consensus)(base)
     np.testing.assert_allclose(out @ w, base @ w, atol=1e-9)
 
 

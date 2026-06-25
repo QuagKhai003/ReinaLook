@@ -39,10 +39,6 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--title", default=None, help="cube TITLE")
     r.add_argument("--tone", type=float, default=None,
                    help="tonal/exposure match 0..1 (lower preserves your footage brightness)")
-    r.add_argument("--space", choices=["oklab", "rgb"], default="oklab",
-                   help="rich transport space (default oklab, perceptual)")
-    r.add_argument("--method", choices=["pdf", "mkl"], default="pdf",
-                   help="rich OT method: pdf (Pitié IDT, full distribution — best, default) or mkl (mean+cov, faster but can clip on strong looks)")
     r.add_argument("--placement", choices=["node2", "between"], default="node2",
                    help="node2: replace Node 2 (DWG/DI->Rec.709+look); between: DWG/DI look between Node 1&2")
     # creative adjustments (baked on top of the look; all default 0 = off; refs optional)
@@ -96,10 +92,8 @@ def _cmd_render(args: argparse.Namespace) -> int:
         print("error: nothing to do — pass --refs, --preset, or some --contrast/--saturation/…",
               file=sys.stderr)
         return 2
-    kwargs = {"space": args.space, "method": args.method}
-    if args.tone is not None:
-        kwargs["tone_strength"] = args.tone
-    fitter = RichFitter(**kwargs)
+    kwargs = {} if args.tone is None else {"tone_strength": args.tone}
+    fitter = RichFitter(**kwargs)         # fixed: Rich / pdf / Oklab
     if args.source:                       # unpaired neutral→graded transport (ADR-0016)
         cube = render_cube_dual(args.source, refs, strength, fitter=fitter, title=title,
                                 placement=args.placement, adjust=adjust, max_dim=args.max_dim)
@@ -112,7 +106,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
     if args.save_preset:
         save_preset(args.save_preset, refs, strength, title)
     where = "between Node 1&2" if args.placement == "between" else "replace Node 2"
-    print(f"wrote {args.out}  ({where}, rich {args.method}/{args.space}, {note}, strength {strength})")
+    print(f"wrote {args.out}  ({where}, rich pdf/oklab, {note}, strength {strength})")
     return 0
 
 
