@@ -36,9 +36,18 @@ _PREVIEW_W = 520
 _DEBOUNCE_MS = 2000   # wait this long after the LAST slider/control change, then compute
 
 
+_DITHER = np.random.default_rng(0).uniform(-0.5, 0.5, (2160, 3840, 1))  # fixed triangular-ish dither
+
+
 def _to_pixmap(img: np.ndarray) -> QtGui.QPixmap:
-    arr = np.ascontiguousarray(np.clip(img, 0, 1) * 255).astype(np.uint8)
-    h, w, _ = arr.shape
+    # The preview is 8-bit (Qt displays 8-bit), so smooth gradients band on screen even though the
+    # exported 65-point cube is smooth. Add ±0.5-level dither before quantizing to hide the banding
+    # — purely cosmetic, makes the preview match how Resolve renders the cube on real footage.
+    img = np.clip(img, 0.0, 1.0) * 255.0
+    h, w = img.shape[:2]
+    if h <= _DITHER.shape[0] and w <= _DITHER.shape[1]:
+        img = img + _DITHER[:h, :w]
+    arr = np.ascontiguousarray(np.clip(np.round(img), 0, 255).astype(np.uint8))
     qimg = QtGui.QImage(arr.data, w, h, 3 * w, QtGui.QImage.Format.Format_RGB888).copy()
     return QtGui.QPixmap.fromImage(qimg)
 
