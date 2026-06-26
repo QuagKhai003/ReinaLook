@@ -105,9 +105,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_ui()
         self._sync_mode_labels()
         self._update_preview()
-        # warm the colour-science import in the background (first PFE load needs it; ~1-2s one-time)
-        import threading
-        threading.Thread(target=lambda: __import__("colour"), daemon=True).start()
+        # (no background colour-import warmup — threading a heavy frozen import at startup races with
+        # Qt init and can crash the exe. First PFE load pays the ~1-2s import once, under a wait cursor.)
 
     # — UI —
     def _build_ui(self) -> None:
