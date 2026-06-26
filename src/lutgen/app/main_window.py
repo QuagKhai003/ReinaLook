@@ -99,10 +99,15 @@ class MainWindow(QtWidgets.QMainWindow):
         # rebuilding the look cube per slider tick lagged; fire ~180ms after the last change.
         self._preview_timer = QtCore.QTimer(self, singleShot=True, interval=180)
         self._preview_timer.timeout.connect(self._do_refresh)
+        self._base_timer = QtCore.QTimer(self, singleShot=True, interval=250)   # debounce PFE rebuild
+        self._base_timer.timeout.connect(self._rebuild_base)
 
         self._build_ui()
         self._sync_mode_labels()
         self._update_preview()
+        # warm the colour-science import in the background (first PFE load needs it; ~1-2s one-time)
+        import threading
+        threading.Thread(target=lambda: __import__("colour"), daemon=True).start()
 
     # — UI —
     def _build_ui(self) -> None:
@@ -519,17 +524,22 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _rebuild_base(self) -> None:
         """Set self._base to the DaVinci base or the film-print PFE base, then recompute the preview
-        'before' (base-converted still). Any look must be recomputed (base changed) → mark dirty."""
-        if self._is_film_print():
-            from lutgen.engine.filmprint import build_film_base
-            try:
-                self._base = build_film_base(self._pfe_path, DEFAULT_SIZE, self._film_exposure_value())
-            except Exception as exc:
-                QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not build film base:\n{exc}")
-                return
-        else:
-            self._base = load_base()
-        self._before_img = apply_cube(self._still, self._base)
+        'before' (base-converted still). Any look must be recomputed (base changed) → mark dirty.
+        Building the film base applies the PFE to the 65-point grid (~0.5s) — show a wait cursor."""
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            if self._is_film_print():
+                from lutgen.engine.filmprint import build_film_base
+                try:
+                    self._base = build_film_base(self._pfe_path, DEFAULT_SIZE, self._film_exposure_value())
+                except Exception as exc:
+                    QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not build film base:\n{exc}")
+                    return
+            else:
+                self._base = load_base()
+            self._before_img = apply_cube(self._still, self._base)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
         self._mark_dirty()                        # look is fit on the base → rebuild on Compute
         self._refresh_preview()
 
@@ -552,7 +562,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_film_exposure(self, _=None) -> None:
         self._film_exposure_lbl.setText(f"Film exposure: {self._film_exposure_value():+.1f} stop")
         if self._is_film_print():
-            self._rebuild_base()
+            self._base_timer.start()              # debounced: rebuild once dragging stops
 
     def _on_placement(self, _=None) -> None:
         self._refresh_preview()                   # changes the look image → rebuild endpoints (once)
