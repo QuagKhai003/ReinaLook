@@ -158,6 +158,27 @@ def test_film_stock_reshapes_no_inputs(app):
     np.testing.assert_array_equal(w._final_samples(), w._base)   # reset → base
 
 
+def test_references_mode_copies_look(app, tmp_path):
+    from PIL import Image
+
+    from lutgen.app.main_window import MainWindow
+
+    refs = []
+    for i in range(3):
+        rng = np.random.default_rng(i)
+        img = np.clip(rng.random((28, 28, 3)) * 0.5 + np.array([0.2, 0.05, -0.1]), 0, 1)  # warm look
+        p = tmp_path / f"look{i}.png"
+        Image.fromarray((img * 255).astype(np.uint8), "RGB").save(p)
+        refs.append(str(p))
+    w = MainWindow()
+    assert w._is_references()                       # default mode = References
+    w._after = refs; w._after_list.addItems(refs)   # look images go in the (only) list
+    assert w._has_inputs()                          # references mode needs only the look images
+    w._launch_compute(); _drain(app, w)
+    assert w._look_samples is not None and w._look_samples.shape == (274625, 3)
+    w.close()
+
+
 def test_pairs_mode_builds_exact_grade(app, tmp_path):
     from PIL import Image
 
@@ -173,7 +194,7 @@ def test_pairs_mode_builds_exact_grade(app, tmp_path):
         Image.fromarray((a * 255).astype(np.uint8), "RGB").save(pa)
         before.append(str(pb)); after.append(str(pa))
     w = MainWindow()
-    w._mode.setCurrentIndex(1)                       # Before/After Pairs
+    w._mode.setCurrentIndex(2)                       # Before/After Pairs
     assert w._is_pairs()
     w._before = before; w._before_list.addItems(before)
     w._after = after; w._after_list.addItems(after)
