@@ -15,6 +15,7 @@ import argparse
 import sys
 
 from lutgen.engine.adjust import Adjustments
+from lutgen.engine.film import FilmStock
 from lutgen.engine.cube_io import write_cube
 from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.pipeline import (
@@ -49,6 +50,13 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--shadows", type=float, default=0.0, help="-1 crush .. +1 lift shadows")
     r.add_argument("--highlights", type=float, default=0.0, help="-1 pull .. +1 lift highlights")
     r.add_argument("--rolloff", type=float, default=0.0, help="0..1 filmic muted highlights")
+    # film-stock transfer (reshapes the color science; all default 0 = off)
+    r.add_argument("--film-contrast", type=float, default=0.0, help="-1 flat .. +1 filmic S-curve")
+    r.add_argument("--film-toe", type=float, default=0.0, help="0..1 matte/lifted blacks")
+    r.add_argument("--film-shoulder", type=float, default=0.0, help="0..1 soft highlight roll-off")
+    r.add_argument("--film-bleach", type=float, default=0.0, help="0..1 desaturate highlights to white")
+    r.add_argument("--film-split", type=float, default=0.0, help="-1 cool-hi/warm-lo .. +1 warm-hi/cool-lo")
+    r.add_argument("--film-saturation", type=float, default=0.0, help="-1 grey .. +1 vivid")
     r.add_argument("--preset", default=None, help="load refs/strength/title from a preset JSON")
     r.add_argument("--save-preset", default=None, help="write the settings used to a preset JSON")
     r.add_argument("--max-dim", type=int, default=1024, help="downscale refs to this max side")
@@ -88,19 +96,23 @@ def _cmd_render(args: argparse.Namespace) -> int:
         tint=args.tint, shadows=args.shadows, highlights=args.highlights,
         highlight_rolloff=args.rolloff,
     )
-    if not refs and adjust.is_identity():
-        print("error: nothing to do — pass --refs, --preset, or some --contrast/--saturation/…",
+    film = FilmStock(
+        contrast=args.film_contrast, toe=args.film_toe, shoulder=args.film_shoulder,
+        highlight_bleach=args.film_bleach, split_warm=args.film_split, saturation=args.film_saturation,
+    )
+    if not refs and adjust.is_identity() and film.is_identity():
+        print("error: nothing to do — pass --refs, --preset, or some --contrast/--film-*/…",
               file=sys.stderr)
         return 2
     kwargs = {} if args.tone is None else {"tone_strength": args.tone}
     fitter = RichFitter(**kwargs)         # fixed: Rich / pdf / Oklab
     if args.source:                       # unpaired neutral→graded transport (ADR-0016)
         cube = render_cube_dual(args.source, refs, strength, fitter=fitter, title=title,
-                                placement=args.placement, adjust=adjust, max_dim=args.max_dim)
+                                placement=args.placement, adjust=adjust, film=film, max_dim=args.max_dim)
         note = f"{len(args.source)} source + {len(refs)} target"
     else:
         cube = render_cube(refs, strength, title=title, fitter=fitter,
-                           placement=args.placement, adjust=adjust, max_dim=args.max_dim)
+                           placement=args.placement, adjust=adjust, film=film, max_dim=args.max_dim)
         note = f"{len(refs)} refs" if refs else "manual grade (no refs)"
     write_cube(args.out, cube.samples, cube.size, title=cube.title)
     if args.save_preset:

@@ -108,21 +108,24 @@ reinalook-gui          # or:  python -m lutgen.app
 ### In ReinaLook
 1. **Open ReinaLook** (Start Menu / Desktop shortcut).
 2. **Pick a Mode** (top-left):
-   - **References (graded only)** — the simplest. You'll add stills of the look you want.
    - **Neutral + Graded (unpaired)** — add a pool of *your* neutral frames **and** a pool of graded
-     examples (any counts, different scenes OK).
-3. **Add reference images:** click **+ Add references…** and select your look stills (JPG/PNG/TIFF).
-4. **Choose the look engine** (sensible defaults are fine):
-   - **Placement:** `Replace CSTout` (most accurate — swaps your Node 2) or `Between CSTs` (sits
-     between Node 1 and Node 2, keeps both).
-   - **Fitter:** `Rich` (recommended) or `Mid` (simple).
-   - **Space:** `oklab` (perceptual, recommended) or `rgb`.
+     look examples (any counts, different scenes OK). Transfers the look's color character.
+   - **Before/After Pairs (exact grade)** — add the *same frames* ungraded **and** graded. Learns the
+     **exact** transform → faithful reproduction. The strongest match if you have graded frames.
+3. **Add the images** with the two **+ Add…** buttons (JPG/PNG/TIFF). Remove with the Remove buttons.
+4. **Placement:** `Replace CSTout` (swap your Node 2) or `Between CSTs` (keep Node 1 + Node 2, cube
+   sits between). Both give the **same final look** — pick by your node tree. The look engine is fixed
+   (Rich / pdf / Oklab — the cleanest).
 5. **Set the dials:**
-   - **Tone** — lower keeps your footage's brightness; higher also matches the references' exposure.
+   - **Tone** — lower keeps your footage's brightness; higher applies more of the reference's tonal
+     reshape (contrast/black/highlight behavior), not just the tint.
    - **Strength** — how strong the look is (0 = your original, 1 = full look).
-   - **Adjustments** (optional panel) — push the look toward what you want, baked into the LUT:
-     **Contrast, Saturation, Temperature, Tint, Shadows, Highlights, Highlight roll-off**. These
-     work **with** references or **on their own** (a pure manual grade — no references needed).
+   - **Film stock** (optional panel) — a real film *transfer* baked into the LUT (reshapes the color
+     science, not just a tint): **Contrast (S-curve), Toe, Shoulder, Highlight bleach, Split-tone,
+     Saturation**. Content-independent, like emulating a stock.
+   - **Adjustments** (optional panel) — simple linear trims: **Contrast, Saturation, Temperature,
+     Tint, Shadows, Highlights, Highlight roll-off**. Film and Adjustments work **with** images or
+     **on their own** (a pure manual grade — no images needed).
 6. **(Optional) Load a preview still** to see the look on your own frame inside the app:
    - In Resolve, on any clip, keep **Node 1** (your → DWG/DI conversion) and **turn Node 2 OFF**.
    - Right-click the viewer → **Grab Still**, then right-click the still → **Export** as a PNG/JPG.
@@ -130,7 +133,7 @@ reinalook-gui          # or:  python -m lutgen.app
      on the right, instantly. (This is only for previewing — it's never needed to make the LUT.)
 7. **Click `Compute preview`** to render the look (a progress % shows; controls grey out while it
    works). Tweak dials and re-Compute until you like it.
-8. **Click `Export .cube…`** and save the LUT. (Optionally **Save preset…** to reuse the recipe.)
+8. **Click `Export .cube…`** and save the LUT.
 
 ### In DaVinci Resolve
 1. Put the `.cube` somewhere Resolve sees it, or **Color page → LUTs → Open LUT Folder**, drop it in,

@@ -19,6 +19,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from lutgen.engine.adjust import Adjustments, apply_adjustments
 from lutgen.engine.apply import apply_cube
 from lutgen.engine.base import DEFAULT_SIZE, load_base
+from lutgen.engine.film import FilmStock, apply_film
 from lutgen.engine.cube_io import write_cube
 from lutgen.engine.regularize import regularize
 from lutgen.engine.strength import blend
@@ -85,6 +86,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._prev_look_img = self._before_img                   # preview at strength 1 (no look yet)
         self._look_samples: np.ndarray | None = None
         self._adj = Adjustments()                                # creative adjustments (manual grade)
+        self._film = FilmStock()                                 # film-stock transfer
         self._before: list[str] = []
         self._after: list[str] = []
 
@@ -99,38 +101,43 @@ class MainWindow(QtWidgets.QMainWindow):
         self._preview_timer.timeout.connect(self._do_refresh)
 
         self._build_ui()
+        self._sync_mode_labels()
         self._update_preview()
 
     # — UI —
     def _build_ui(self) -> None:
         # Neutral + Graded (unpaired) is the only mode.
+        self._mode = QtWidgets.QComboBox()
+        self._mode.addItems(["Neutral + Graded (unpaired)", "Before/After Pairs (exact grade)"])
+        self._mode.currentIndexChanged.connect(self._on_mode)
+
         self._before_list = _file_list()
         self._after_list = _file_list()
-        before_add = QtWidgets.QPushButton("+ Add NEUTRAL (your footage)…")
-        after_add = QtWidgets.QPushButton("+ Add GRADED (the look)…")
-        before_rm = QtWidgets.QPushButton("Remove selected neutral")
-        after_rm = QtWidgets.QPushButton("Remove selected graded")
-        before_add.clicked.connect(self._add_before)
-        after_add.clicked.connect(self._add_after)
+        self._before_lbl_w = QtWidgets.QLabel()
+        self._after_lbl_w = QtWidgets.QLabel()
+        self._before_add = QtWidgets.QPushButton()
+        self._after_add = QtWidgets.QPushButton()
+        before_rm = QtWidgets.QPushButton("Remove selected (top list)")
+        after_rm = QtWidgets.QPushButton("Remove selected (bottom list)")
+        self._before_add.clicked.connect(self._add_before)
+        self._after_add.clicked.connect(self._add_after)
         before_rm.clicked.connect(self._remove_before)
         after_rm.clicked.connect(self._remove_after)
         pairs_page = QtWidgets.QWidget()
         pl = QtWidgets.QVBoxLayout(pairs_page)
         pl.setContentsMargins(0, 0, 0, 0)
-        pl.addWidget(QtWidgets.QLabel("NEUTRAL images (your ungraded footage)"))
+        pl.addWidget(self._before_lbl_w)
         pl.addWidget(self._before_list)
-        pl.addWidget(before_add)
+        pl.addWidget(self._before_add)
         pl.addWidget(before_rm)
-        pl.addWidget(QtWidgets.QLabel("GRADED images (the target look)"))
+        pl.addWidget(self._after_lbl_w)
         pl.addWidget(self._after_list)
-        pl.addWidget(after_add)
+        pl.addWidget(self._after_add)
         pl.addWidget(after_rm)
-        hint = QtWidgets.QLabel("Add some NEUTRAL frames (your ungraded footage) and some GRADED "
-                                "frames (the look). Different scenes/lighting OK; counts need not "
-                                "match. Transports your neutral colors toward the graded look.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray;")
-        pl.addWidget(hint)
+        self._mode_hint = QtWidgets.QLabel()
+        self._mode_hint.setWordWrap(True)
+        self._mode_hint.setStyleSheet("color: gray;")
+        pl.addWidget(self._mode_hint)
 
         self._pairs_page = pairs_page
 
@@ -147,6 +154,7 @@ class MainWindow(QtWidgets.QMainWindow):
         form = QtWidgets.QFormLayout()
         form.addRow("Placement", self._placement)
 
+        film_box = self._build_film_panel()
         adjust_box = self._build_adjust_panel()
 
         self._compute_btn = QtWidgets.QPushButton("Compute preview")
@@ -156,6 +164,8 @@ class MainWindow(QtWidgets.QMainWindow):
         export_btn.clicked.connect(self._export)
 
         left = QtWidgets.QVBoxLayout()
+        left.addWidget(QtWidgets.QLabel("Mode"))
+        left.addWidget(self._mode)
         left.addWidget(self._pairs_page)
         left.addSpacing(8)
         left.addLayout(form)
@@ -163,6 +173,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addWidget(self._tone)
         left.addWidget(self._strength_lbl)
         left.addWidget(self._strength)
+        left.addWidget(film_box)
         left.addWidget(adjust_box)
         left.addStretch(1)
         left.addWidget(self._compute_btn)
@@ -259,6 +270,51 @@ class MainWindow(QtWidgets.QMainWindow):
             s.blockSignals(True); s.setValue(0); s.blockSignals(False)
         self._on_adjust()
 
+    # — film-stock transfer panel (reshapes the colour science; works with or without a look) —
+    _FILM_SPECS = [
+        ("contrast", "Contrast (S-curve)", -100, 100, 0),
+        ("toe", "Toe (matte blacks)", 0, 100, 0),
+        ("shoulder", "Shoulder (roll-off)", 0, 100, 0),
+        ("highlight_bleach", "Highlight bleach", 0, 100, 0),
+        ("split_warm", "Split-tone (warm/cool)", -100, 100, 0),
+        ("saturation", "Saturation", -100, 100, 0),
+    ]
+
+    def _build_film_panel(self) -> QtWidgets.QWidget:
+        box = QtWidgets.QGroupBox("Film stock (transfer — optional)")
+        box.setCheckable(True); box.setChecked(False)
+        v = QtWidgets.QVBoxLayout(box)
+        self._film_sliders = {}
+        for field, label, lo, hi, default in self._FILM_SPECS:
+            row = QtWidgets.QHBoxLayout()
+            w = QtWidgets.QLabel(label); w.setMinimumWidth(130)
+            sl = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+            sl.setRange(lo, hi); sl.setValue(default)
+            sl.valueChanged.connect(self._on_film)
+            row.addWidget(w); row.addWidget(sl, 1)
+            v.addLayout(row)
+            self._film_sliders[field] = sl
+        reset = QtWidgets.QPushButton("Reset film")
+        reset.clicked.connect(self._reset_film)
+        v.addWidget(reset)
+        box.toggled.connect(self._on_film)
+        self._film_box = box
+        return box
+
+    def _read_film(self) -> FilmStock:
+        if not self._film_box.isChecked():
+            return FilmStock()
+        return FilmStock(**{f: s.value() / 100.0 for f, s in self._film_sliders.items()})
+
+    def _on_film(self, _=None) -> None:
+        self._film = self._read_film()
+        self._refresh_preview()
+
+    def _reset_film(self) -> None:
+        for s in self._film_sliders.values():
+            s.blockSignals(True); s.setValue(0); s.blockSignals(False)
+        self._on_film()
+
     # — state —
     def _tone_value(self) -> float:
         return self._tone.value() / 100.0
@@ -266,22 +322,33 @@ class MainWindow(QtWidgets.QMainWindow):
     def _strength_value(self) -> float:
         return self._strength.value() / 100.0
 
+    def _is_pairs(self) -> bool:
+        return self._mode.currentIndex() == 1
+
     def _has_inputs(self) -> bool:
         return bool(self._before and self._after)
 
     # — building the look (pure; safe to run off the UI thread) —
     def _build_look(self, snap, report) -> np.ndarray | None:
-        # Neutral + Graded: transport the neutral pool toward the graded pool (Rich / pdf / Oklab).
         if not snap["before"] or not snap["after"]:
             return None
         report(5)
-        consensus = build_consensus(compute_stats_batch(load_references(snap["after"])))
-        report(30)
-        src = np.concatenate([i.reshape(-1, 3) for i in load_references(snap["before"])])
-        if src.shape[0] > 200_000:
-            src = src[np.random.default_rng(0).choice(src.shape[0], 200_000, replace=False)]
-        report(45)
-        look = RichFitter(tone_strength=snap["tone"]).fit(consensus, source_samples=src)
+        if snap["pairs"]:
+            # Before/After Pairs: learn the EXACT grade from matched frames (PairsFitter).
+            from lutgen.fitter.pairs import PairsFitter
+            befores = load_references(snap["before"])
+            afters = load_references(snap["after"])
+            n = min(len(befores), len(afters))
+            report(30)
+            look = PairsFitter(size=DEFAULT_SIZE).fit_from_pairs(befores[:n], afters[:n])
+        else:
+            # Neutral + Graded: transport the neutral pool toward the graded pool (Rich/pdf/Oklab).
+            consensus = build_consensus(compute_stats_batch(load_references(snap["after"])))
+            report(30)
+            src = np.concatenate([i.reshape(-1, 3) for i in load_references(snap["before"])])
+            if src.shape[0] > 200_000:
+                src = src[np.random.default_rng(0).choice(src.shape[0], 200_000, replace=False)]
+            look = RichFitter(tone_strength=snap["tone"]).fit(consensus, source_samples=src)
         report(60)
         return look(self._base)
 
@@ -289,12 +356,13 @@ class MainWindow(QtWidgets.QMainWindow):
         return "between" if self._placement.currentIndex() == 1 else "node2"
 
     def _looked(self) -> np.ndarray | None:
-        """Full-strength looked base incl. creative adjustments. None = no change (pure base)."""
+        """Full-strength looked base incl. film transfer + creative adjustments. None = pure base."""
         src = self._look_samples
-        if self._adj.is_identity():
-            return src                                   # fitter look, or None (no refs)
-        base_or_look = src if src is not None else self._base
-        return apply_adjustments(base_or_look, self._adj)  # manual grade works with or without refs
+        if self._film.is_identity() and self._adj.is_identity():
+            return src                                   # fitter look, or None (no inputs)
+        out = src if src is not None else self._base
+        out = apply_film(out, self._film)                # film/adjustments work with or without a look
+        return apply_adjustments(out, self._adj)
 
     def _final_at(self, strength: float) -> np.ndarray:
         looked = self._looked()
@@ -307,7 +375,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _snapshot(self, refit: bool) -> dict:
         return dict(
-            refit=refit, before=list(self._before), after=list(self._after),
+            refit=refit, pairs=self._is_pairs(),
+            before=list(self._before), after=list(self._after),
             tone=self._tone_value(),
             strength=self._strength_value(), still=self._still, placement=self._placement_key(),
             still_dirty=self._still_dirty, look=self._look_samples,
@@ -327,7 +396,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """Apply a cube to the still. For 'between' the cube is DWG/DI→DWG/DI, so apply Node 2
         (base) after to show the Rec.709 result."""
         looked = apply_cube(self._still, final)
-        has_look = self._look_samples is not None or not self._adj.is_identity()
+        has_look = (self._look_samples is not None or not self._adj.is_identity()
+                    or not self._film.is_identity())
         if self._placement_key() == "between" and has_look:
             looked = apply_cube(looked, self._base)
         return looked
@@ -403,6 +473,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self._render_preview()
 
     # — slots (no auto-compute; everything just marks "changes pending") —
+    def _sync_mode_labels(self) -> None:
+        if self._is_pairs():
+            self._before_lbl_w.setText("BEFORE frames (your footage, ungraded)")
+            self._after_lbl_w.setText("AFTER frames (the SAME frames, graded)")
+            self._before_add.setText("+ Add BEFORE (ungraded)…")
+            self._after_add.setText("+ Add AFTER (graded)…")
+            self._mode_hint.setText("Pairs learn the EXACT grade. Add matched frames: each BEFORE "
+                                    "is the same shot as the AFTER at the same index. Equal counts "
+                                    "(extras ignored). Tone/Strength still apply.")
+        else:
+            self._before_lbl_w.setText("NEUTRAL images (your ungraded footage)")
+            self._after_lbl_w.setText("GRADED images (the target look)")
+            self._before_add.setText("+ Add NEUTRAL (your footage)…")
+            self._after_add.setText("+ Add GRADED (the look)…")
+            self._mode_hint.setText("Unpaired pools: add NEUTRAL frames + GRADED frames. Different "
+                                    "scenes OK, counts need not match. Transports your neutral colors "
+                                    "toward the graded look.")
+
+    def _on_mode(self, _=None) -> None:
+        self._sync_mode_labels(); self._mark_dirty()
+
     def _on_placement(self, _=None) -> None:
         self._refresh_preview()                   # changes the look image → rebuild endpoints (once)
 
@@ -456,10 +547,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not build look:\n{exc}")
             finally:
                 self._set_busy(False)
-        if self._look_samples is None and self._adj.is_identity():
-            msg = (f"Add NEUTRAL and GRADED images first — now {len(self._before)} neutral, "
-                   f"{len(self._after)} graded (need at least one of each), "
-                   f"or open Adjustments to make a manual grade.")
+        if self._look_samples is None and self._adj.is_identity() and self._film.is_identity():
+            msg = (f"Add images first — now {len(self._before)} / {len(self._after)} "
+                   f"(need at least one of each), or open Film stock / Adjustments for a manual grade.")
             QtWidgets.QMessageBox.warning(self, "ReinaLook", msg)
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export .cube", "look.cube", "Cube (*.cube)")
