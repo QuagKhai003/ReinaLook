@@ -17,6 +17,7 @@ import numpy as np
 from lutgen.engine.adjust import Adjustments, apply_adjustments
 from lutgen.engine.apply import apply_cube
 from lutgen.engine.base import DEFAULT_SIZE, INVERSE_SIZE, load_base, load_base_inverse
+from lutgen.engine.film import FilmStock, apply_film
 from lutgen.engine.cube_io import Cube
 from lutgen.engine.grid import identity_grid
 from lutgen.engine.regularize import regularize
@@ -27,6 +28,15 @@ from lutgen.fitter.rich import RichFitter
 from .consensus import build_consensus
 from .ingest import load_references
 from .stats import compute_stats_batch
+
+
+def _post(looked: np.ndarray, film: FilmStock | None, adjust: Adjustments | None) -> np.ndarray:
+    """Apply the film transfer then the creative adjustments to the looked base (both optional)."""
+    if film is not None:
+        looked = apply_film(looked, film)
+    if adjust is not None:
+        looked = apply_adjustments(looked, adjust)
+    return looked
 
 
 def _assemble(looked_full: np.ndarray, strength: float, placement: str, size: int) -> np.ndarray:
@@ -54,12 +64,13 @@ def render_cube(
     fitter: LookFitter | None = None,
     placement: str = "node2",
     adjust: Adjustments | None = None,
+    film: FilmStock | None = None,
     max_dim: int | None = 1024,
     size: int = DEFAULT_SIZE,
 ) -> Cube:
-    """Build a finished `.cube`. References optional — with ``ref_paths`` empty and ``adjust`` set,
-    this is a pure manual grade over the base. Steps: refs → consensus → fit → sample on base →
-    creative ``adjust`` → assemble for ``placement`` → blend by strength.
+    """Build a finished `.cube`. References optional — with ``ref_paths`` empty this is a pure
+    manual grade (``adjust``) / film transfer (``film``) over the base. Steps: refs → consensus →
+    fit → sample on base → ``film`` → ``adjust`` → assemble for ``placement`` → blend by strength.
     """
     base = load_base(size)
     if ref_paths:
@@ -68,11 +79,9 @@ def render_cube(
         consensus = build_consensus(compute_stats_batch(images))
         looked = fitter.fit(consensus)(base)
     else:
-        looked = base.copy()                 # manual-only: adjustments over the base
+        looked = base.copy()                 # manual-only: film/adjustments over the base
 
-    if adjust is not None:
-        looked = apply_adjustments(looked, adjust)
-
+    looked = _post(looked, film, adjust)
     final = _assemble(looked, strength, placement, size)
     return Cube(size=size, samples=final, title=title)
 
@@ -86,6 +95,7 @@ def render_cube_dual(
     title: str | None = None,
     placement: str = "node2",
     adjust: Adjustments | None = None,
+    film: FilmStock | None = None,
     max_dim: int | None = 1024,
     size: int = DEFAULT_SIZE,
     sample_cap: int = 200_000,
@@ -119,8 +129,7 @@ def render_cube_dual(
     moved = look(source_pixels)
     grade = learn_grade_cube(source_pixels, moved, size, smoothing=0.025, min_weight=1e-3)
     look_samples = apply_cube(base, grade, size)
-    if adjust is not None:
-        look_samples = apply_adjustments(look_samples, adjust)
+    look_samples = _post(look_samples, film, adjust)
     final = _assemble(look_samples, strength, placement, size)
     return Cube(size=size, samples=final, title=title)
 

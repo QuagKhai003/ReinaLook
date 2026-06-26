@@ -144,6 +144,44 @@ def test_adjustments_manual_grade_no_refs(app):
     w.close()
 
 
+def test_film_stock_reshapes_no_inputs(app):
+    from lutgen.app.main_window import MainWindow
+
+    w = MainWindow()
+    w._film_box.setChecked(True)
+    w._film_sliders["contrast"].setValue(70)
+    w._film_sliders["shoulder"].setValue(50)
+    app.processEvents()
+    final = w._final_samples()
+    assert not np.array_equal(final, w._base)           # film reshaped the base, no refs
+    w._reset_film(); app.processEvents()
+    np.testing.assert_array_equal(w._final_samples(), w._base)   # reset → base
+
+
+def test_pairs_mode_builds_exact_grade(app, tmp_path):
+    from PIL import Image
+
+    from lutgen.app.main_window import MainWindow
+
+    before, after = [], []
+    for i in range(2):
+        rng = np.random.default_rng(i)
+        b = np.clip(rng.random((28, 28, 3)) * 0.6 + 0.15, 0, 1)
+        a = np.clip(b * 0.8 + np.array([0.1, 0.0, -0.05]), 0, 1)   # a known grade of b
+        pb = tmp_path / f"b{i}.png"; pa = tmp_path / f"a{i}.png"
+        Image.fromarray((b * 255).astype(np.uint8), "RGB").save(pb)
+        Image.fromarray((a * 255).astype(np.uint8), "RGB").save(pa)
+        before.append(str(pb)); after.append(str(pa))
+    w = MainWindow()
+    w._mode.setCurrentIndex(1)                       # Before/After Pairs
+    assert w._is_pairs()
+    w._before = before; w._before_list.addItems(before)
+    w._after = after; w._after_list.addItems(after)
+    w._launch_compute(); _drain(app, w)
+    assert w._look_samples is not None and w._look_samples.shape == (274625, 3)
+    w.close()
+
+
 def test_export_writes_valid_cube(app, tmp_path):
     from lutgen.app.main_window import MainWindow
     from lutgen.engine.cube_io import write_cube
