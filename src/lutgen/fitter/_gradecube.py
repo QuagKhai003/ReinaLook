@@ -17,6 +17,37 @@ from scipy.ndimage import gaussian_filter
 
 from lutgen.engine.apply import apply_cube
 from lutgen.engine.grid import identity_grid
+from lutgen.engine.regularize import gamut_clamp
+
+
+def learn_grade_cube_bounded(before: np.ndarray, after: np.ndarray, size: int,
+                             smoothing: float = 0.025, coverage: float = 0.10) -> np.ndarray:
+    """Build a grade cube from scattered (before→after) samples that EXTRAPOLATES gently (ADR-0023).
+
+    Unlike `learn_grade_cube` (which nearest-fills unsampled colours — flat/washed), this applies the
+    learned *shift* (after−before) only where the source pool has nearby data and fades it toward the
+    identity for colours far from the pool (>~`coverage` away). So out-of-pool colours degrade gently
+    instead of washing or exploding. Final gamut-clamp keeps hue. Does NOT remove the static-LUT
+    distribution-sensitivity (see ADR-0023) — it only fails softer."""
+    from scipy.spatial import cKDTree
+
+    before = np.asarray(before, dtype=np.float64).reshape(-1, 3)
+    after = np.asarray(after, dtype=np.float64).reshape(-1, 3)
+    if before.shape[0] > 60_000:                       # subsample for the KD-tree
+        idx = np.random.default_rng(0).choice(before.shape[0], 60_000, replace=False)
+        before, after = before[idx], after[idx]
+    shift = after - before
+    grid = identity_grid(size)
+    dist, nn = cKDTree(before).query(grid, k=1)
+    w = np.clip(1.0 - dist / max(coverage, 1e-6), 0.0, 1.0)[:, None]   # 1 near data → 0 far
+    cube = grid + w * shift[nn]                          # apply learned shift, fade to identity
+    if smoothing > 0:
+        sigma = smoothing * (size - 1)
+        lat = cube.reshape(size, size, size, 3)
+        for c in range(3):
+            lat[..., c] = gaussian_filter(lat[..., c], sigma=sigma, mode="nearest")
+        cube = lat.reshape(-1, 3)
+    return gamut_clamp(cube)
 
 
 class CubeLookTransform:
