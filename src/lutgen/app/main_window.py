@@ -112,7 +112,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_ui(self) -> None:
         # Neutral + Graded (unpaired) is the only mode.
         self._mode = QtWidgets.QComboBox()
-        self._mode.addItems(["Neutral + Graded (unpaired)", "Before/After Pairs (exact grade)"])
+        self._mode.addItems(["References (copy a look)", "Neutral + Graded (unpaired)",
+                             "Before/After Pairs (exact grade)"])
         self._mode.currentIndexChanged.connect(self._on_mode)
 
         self._before_list = _file_list()
@@ -121,11 +122,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._after_lbl_w = QtWidgets.QLabel()
         self._before_add = QtWidgets.QPushButton()
         self._after_add = QtWidgets.QPushButton()
-        before_rm = QtWidgets.QPushButton("Remove selected (top list)")
+        self._before_rm = QtWidgets.QPushButton("Remove selected (top list)")
         after_rm = QtWidgets.QPushButton("Remove selected (bottom list)")
         self._before_add.clicked.connect(self._add_before)
         self._after_add.clicked.connect(self._add_after)
-        before_rm.clicked.connect(self._remove_before)
+        self._before_rm.clicked.connect(self._remove_before)
         after_rm.clicked.connect(self._remove_after)
         pairs_page = QtWidgets.QWidget()
         pl = QtWidgets.QVBoxLayout(pairs_page)
@@ -133,7 +134,7 @@ class MainWindow(QtWidgets.QMainWindow):
         pl.addWidget(self._before_lbl_w)
         pl.addWidget(self._before_list)
         pl.addWidget(self._before_add)
-        pl.addWidget(before_rm)
+        pl.addWidget(self._before_rm)
         pl.addWidget(self._after_lbl_w)
         pl.addWidget(self._after_list)
         pl.addWidget(self._after_add)
@@ -342,18 +343,27 @@ class MainWindow(QtWidgets.QMainWindow):
     def _strength_value(self) -> float:
         return self._strength.value() / 100.0
 
+    def _mode_key(self) -> str:
+        return {0: "references", 1: "dual", 2: "pairs"}[self._mode.currentIndex()]
+
+    def _is_references(self) -> bool:
+        return self._mode.currentIndex() == 0
+
     def _is_pairs(self) -> bool:
-        return self._mode.currentIndex() == 1
+        return self._mode.currentIndex() == 2
 
     def _has_inputs(self) -> bool:
+        if self._is_references():
+            return bool(self._after)              # references mode needs only the look images
         return bool(self._before and self._after)
 
     # — building the look (pure; safe to run off the UI thread) —
     def _build_look(self, snap, report) -> np.ndarray | None:
-        if not snap["before"] or not snap["after"]:
+        mode = snap["mode"]
+        if not snap["after"] or (mode != "references" and not snap["before"]):
             return None
         report(5)
-        if snap["pairs"]:
+        if mode == "pairs":
             # Before/After Pairs: learn the EXACT grade from matched frames (PairsFitter).
             from lutgen.fitter.pairs import PairsFitter
             befores = load_references(snap["before"])
@@ -361,8 +371,13 @@ class MainWindow(QtWidgets.QMainWindow):
             n = min(len(befores), len(afters))
             report(30)
             look = PairsFitter(size=DEFAULT_SIZE).fit_from_pairs(befores[:n], afters[:n])
+        elif mode == "references":
+            # References (copy a look): transport the base toward the references' colour distribution.
+            consensus = build_consensus(compute_stats_batch(load_references(snap["after"])))
+            report(30)
+            look = RichFitter(tone_strength=snap["tone"]).fit(consensus)
         else:
-            # Neutral + Graded: transport the neutral pool toward the graded pool (Rich/pdf/Oklab).
+            # Neutral + Graded: transport the neutral pool toward the graded pool.
             consensus = build_consensus(compute_stats_batch(load_references(snap["after"])))
             report(30)
             src = np.concatenate([i.reshape(-1, 3) for i in load_references(snap["before"])])
@@ -395,7 +410,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _snapshot(self, refit: bool) -> dict:
         return dict(
-            refit=refit, pairs=self._is_pairs(),
+            refit=refit, mode=self._mode_key(),
             before=list(self._before), after=list(self._after),
             tone=self._tone_value(),
             strength=self._strength_value(), still=self._still, placement=self._placement_key(),
@@ -494,7 +509,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # — slots (no auto-compute; everything just marks "changes pending") —
     def _sync_mode_labels(self) -> None:
-        if self._is_pairs():
+        refs = self._is_references()
+        # references mode = look images only → hide the "before"/neutral list
+        for w in (self._before_lbl_w, self._before_list, self._before_add, self._before_rm):
+            w.setVisible(not refs)
+        if refs:
+            self._after_lbl_w.setText("Reference look images (the film/look to copy)")
+            self._after_add.setText("+ Add reference look images…")
+            self._mode_hint.setText("Copy a look: add stills of the film/look you want. Your footage "
+                                    "takes their colour character. NOT a pixel copy — different scenes "
+                                    "→ the feel transfers, not the image. Tone/Strength tune it.")
+        elif self._is_pairs():
             self._before_lbl_w.setText("BEFORE frames (your footage, ungraded)")
             self._after_lbl_w.setText("AFTER frames (the SAME frames, graded)")
             self._before_add.setText("+ Add BEFORE (ungraded)…")
