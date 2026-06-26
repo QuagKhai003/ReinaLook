@@ -127,37 +127,6 @@ def test_remove_in_neutral_graded_mode(app):
     w.close()
 
 
-def test_adjustments_manual_grade_no_refs(app):
-    from lutgen.app.main_window import MainWindow
-
-    w = MainWindow()
-    # no references; enable Adjustments + crank contrast → final cube differs from base
-    w._adjust_box.setChecked(True)
-    w._adj_sliders["contrast"].setValue(80)
-    app.processEvents()
-    final = w._final_samples()
-    assert final.shape == w._base.shape
-    assert not np.array_equal(final, w._base)        # manual grade applied without refs
-    assert final.std() > w._base.std()               # contrast raised spread
-    w._reset_adjust(); app.processEvents()
-    np.testing.assert_array_equal(w._final_samples(), w._base)  # reset → base
-    w.close()
-
-
-def test_film_stock_reshapes_no_inputs(app):
-    from lutgen.app.main_window import MainWindow
-
-    w = MainWindow()
-    w._film_box.setChecked(True)
-    w._film_sliders["contrast"].setValue(70)
-    w._film_sliders["shoulder"].setValue(50)
-    app.processEvents()
-    final = w._final_samples()
-    assert not np.array_equal(final, w._base)           # film reshaped the base, no refs
-    w._reset_film(); app.processEvents()
-    np.testing.assert_array_equal(w._final_samples(), w._base)   # reset → base
-
-
 def test_export_writes_valid_cube(app, tmp_path):
     from lutgen.app.main_window import MainWindow
     from lutgen.engine.cube_io import write_cube

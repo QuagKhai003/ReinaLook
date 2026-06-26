@@ -16,10 +16,8 @@ from __future__ import annotations
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from lutgen.engine.adjust import Adjustments, apply_adjustments
 from lutgen.engine.apply import apply_cube
 from lutgen.engine.base import DEFAULT_SIZE, load_base
-from lutgen.engine.film import FilmStock, apply_film
 from lutgen.engine.cube_io import write_cube
 from lutgen.engine.regularize import regularize
 from lutgen.engine.strength import blend
@@ -85,8 +83,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._before_img = apply_cube(self._still, self._base)   # preview at strength 0
         self._prev_look_img = self._before_img                   # preview at strength 1 (no look yet)
         self._look_samples: np.ndarray | None = None
-        self._adj = Adjustments()                                # creative adjustments (manual grade)
-        self._film = FilmStock()                                 # film-stock transfer
         self._before: list[str] = []
         self._after: list[str] = []
 
@@ -154,9 +150,6 @@ class MainWindow(QtWidgets.QMainWindow):
         form = QtWidgets.QFormLayout()
         form.addRow("Placement", self._placement)
 
-        film_box = self._build_film_panel()
-        adjust_box = self._build_adjust_panel()
-
         self._compute_btn = QtWidgets.QPushButton("Compute preview")
         self._compute_btn.setStyleSheet("font-weight: bold; padding: 6px;")
         self._compute_btn.clicked.connect(self._launch_compute)
@@ -171,8 +164,6 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addWidget(self._tone)
         left.addWidget(self._strength_lbl)
         left.addWidget(self._strength)
-        left.addWidget(film_box)
-        left.addWidget(adjust_box)
         left.addStretch(1)
         left.addWidget(self._compute_btn)
         left.addWidget(export_btn)
@@ -221,98 +212,6 @@ class MainWindow(QtWidgets.QMainWindow):
         s.setRange(0, 100); s.setValue(value); s.valueChanged.connect(slot)
         return s
 
-    # — creative adjustments panel (manual grade; works with or without references) —
-    _ADJ_SPECS = [
-        ("contrast", "Contrast", -100, 100, 0),
-        ("saturation", "Saturation", -100, 100, 0),
-        ("temperature", "Temperature", -100, 100, 0),
-        ("tint", "Tint", -100, 100, 0),
-        ("shadows", "Shadows", -100, 100, 0),
-        ("highlights", "Highlights", -100, 100, 0),
-        ("highlight_rolloff", "Highlight roll-off", 0, 100, 0),
-    ]
-
-    def _build_adjust_panel(self) -> QtWidgets.QWidget:
-        box = QtWidgets.QGroupBox("Adjustments (manual grade — optional)")
-        box.setCheckable(True)
-        box.setChecked(False)                         # collapsed/off by default
-        v = QtWidgets.QVBoxLayout(box)
-        self._adj_sliders = {}
-        for field, label, lo, hi, default in self._ADJ_SPECS:
-            row = QtWidgets.QHBoxLayout()
-            lbl = QtWidgets.QLabel(label); lbl.setMinimumWidth(110)
-            sl = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-            sl.setRange(lo, hi); sl.setValue(default)
-            sl.valueChanged.connect(self._on_adjust)
-            row.addWidget(lbl); row.addWidget(sl, 1)
-            v.addLayout(row)
-            self._adj_sliders[field] = sl
-        reset = QtWidgets.QPushButton("Reset adjustments")
-        reset.clicked.connect(self._reset_adjust)
-        v.addWidget(reset)
-        box.toggled.connect(self._on_adjust)          # toggling on/off updates the look
-        self._adjust_box = box
-        return box
-
-    def _read_adjust(self) -> Adjustments:
-        if not self._adjust_box.isChecked():
-            return Adjustments()                      # panel off → no adjustments
-        return Adjustments(**{f: s.value() / 100.0 for f, s in self._adj_sliders.items()})
-
-    def _on_adjust(self, _=None) -> None:
-        self._adj = self._read_adjust()
-        self._refresh_preview()                       # cheap: re-derive endpoints + render
-
-    def _reset_adjust(self) -> None:
-        for s in self._adj_sliders.values():
-            s.blockSignals(True); s.setValue(0); s.blockSignals(False)
-        self._on_adjust()
-
-    # — film-stock transfer panel (reshapes the colour science; works with or without a look) —
-    _FILM_SPECS = [
-        ("contrast", "Contrast (S-curve)", -100, 100, 0),
-        ("toe", "Toe (matte blacks)", 0, 100, 0),
-        ("shoulder", "Shoulder (roll-off)", 0, 100, 0),
-        ("highlight_bleach", "Highlight bleach", 0, 100, 0),
-        ("split_warm", "Split-tone (warm/cool)", -100, 100, 0),
-        ("saturation", "Saturation", -100, 100, 0),
-    ]
-
-    def _build_film_panel(self) -> QtWidgets.QWidget:
-        box = QtWidgets.QGroupBox("Film stock (transfer — optional)")
-        box.setCheckable(True); box.setChecked(False)
-        v = QtWidgets.QVBoxLayout(box)
-        self._film_sliders = {}
-        for field, label, lo, hi, default in self._FILM_SPECS:
-            row = QtWidgets.QHBoxLayout()
-            w = QtWidgets.QLabel(label); w.setMinimumWidth(130)
-            sl = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-            sl.setRange(lo, hi); sl.setValue(default)
-            sl.valueChanged.connect(self._on_film)
-            row.addWidget(w); row.addWidget(sl, 1)
-            v.addLayout(row)
-            self._film_sliders[field] = sl
-        reset = QtWidgets.QPushButton("Reset film")
-        reset.clicked.connect(self._reset_film)
-        v.addWidget(reset)
-        box.toggled.connect(self._on_film)
-        self._film_box = box
-        return box
-
-    def _read_film(self) -> FilmStock:
-        if not self._film_box.isChecked():
-            return FilmStock()
-        return FilmStock(**{f: s.value() / 100.0 for f, s in self._film_sliders.items()})
-
-    def _on_film(self, _=None) -> None:
-        self._film = self._read_film()
-        self._refresh_preview()
-
-    def _reset_film(self) -> None:
-        for s in self._film_sliders.values():
-            s.blockSignals(True); s.setValue(0); s.blockSignals(False)
-        self._on_film()
-
     # — state —
     def _tone_value(self) -> float:
         return self._tone.value() / 100.0
@@ -346,13 +245,8 @@ class MainWindow(QtWidgets.QMainWindow):
         return "between" if self._placement.currentIndex() == 1 else "node2"
 
     def _looked(self) -> np.ndarray | None:
-        """Full-strength looked base incl. film transfer + creative adjustments. None = pure base."""
-        src = self._look_samples
-        if self._film.is_identity() and self._adj.is_identity():
-            return src                                   # fitter look, or None (no inputs)
-        out = src if src is not None else self._base
-        out = apply_film(out, self._film)                # film/adjustments work with or without a look
-        return apply_adjustments(out, self._adj)
+        """Full-strength looked base. None = no look yet (pure base)."""
+        return self._look_samples
 
     def _final_at(self, strength: float) -> np.ndarray:
         looked = self._looked()
@@ -386,8 +280,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Apply a cube to the still. For 'between' the cube is DWG/DI→DWG/DI, so apply Node 2
         (base) after to show the Rec.709 result."""
         looked = apply_cube(self._still, final)
-        has_look = (self._look_samples is not None or not self._adj.is_identity()
-                    or not self._film.is_identity())
+        has_look = self._look_samples is not None
         if self._placement_key() == "between" and has_look:
             looked = apply_cube(looked, self._base)
         return looked
@@ -526,9 +419,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not build look:\n{exc}")
             finally:
                 self._set_busy(False)
-        if self._look_samples is None and self._adj.is_identity() and self._film.is_identity():
-            msg = (f"Add images first — now {len(self._before)} / {len(self._after)} "
-                   f"(need at least one of each), or open Film stock / Adjustments for a manual grade.")
+        if self._look_samples is None:
+            msg = (f"Add NEUTRAL and GRADED images first — now {len(self._before)} neutral, "
+                   f"{len(self._after)} graded (need at least one of each).")
             QtWidgets.QMessageBox.warning(self, "ReinaLook", msg)
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export .cube", "look.cube", "Cube (*.cube)")
