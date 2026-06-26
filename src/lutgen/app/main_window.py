@@ -110,11 +110,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # — UI —
     def _build_ui(self) -> None:
-        # Neutral + Graded (unpaired) is the only mode.
-        self._mode = QtWidgets.QComboBox()
-        self._mode.addItems(["References (copy a look)", "Neutral + Graded (unpaired)",
-                             "Before/After Pairs (exact grade)"])
-        self._mode.currentIndexChanged.connect(self._on_mode)
+        # Single mode: Before/After (neutral footage → graded reference look).
 
         self._before_list = _file_list()
         self._after_list = _file_list()
@@ -183,8 +179,6 @@ class MainWindow(QtWidgets.QMainWindow):
         export_btn.clicked.connect(self._export)
 
         left = QtWidgets.QVBoxLayout()
-        left.addWidget(QtWidgets.QLabel("Mode"))
-        left.addWidget(self._mode)
         left.addWidget(self._pairs_page)
         left.addSpacing(8)
         left.addLayout(form)
@@ -343,49 +337,27 @@ class MainWindow(QtWidgets.QMainWindow):
     def _strength_value(self) -> float:
         return self._strength.value() / 100.0
 
-    def _mode_key(self) -> str:
-        return {0: "references", 1: "dual", 2: "pairs"}[self._mode.currentIndex()]
-
-    def _is_references(self) -> bool:
-        return self._mode.currentIndex() == 0
-
-    def _is_pairs(self) -> bool:
-        return self._mode.currentIndex() == 2
-
     def _has_inputs(self) -> bool:
-        if self._is_references():
-            return bool(self._after)              # references mode needs only the look images
         return bool(self._before and self._after)
 
     # — building the look (pure; safe to run off the UI thread) —
     def _build_look(self, snap, report) -> np.ndarray | None:
-        mode = snap["mode"]
-        if not snap["after"] or (mode != "references" and not snap["before"]):
+        # Before/After: transport the neutral pool → graded pool, baked through a gamut-aware
+        # bounded grade cube (ADR-0023), applied to the base. The foundation look.
+        if not snap["before"] or not snap["after"]:
             return None
+        from lutgen.fitter._gradecube import learn_grade_cube_bounded
         report(5)
-        if mode == "pairs":
-            # Before/After Pairs: learn the EXACT grade from matched frames (PairsFitter).
-            from lutgen.fitter.pairs import PairsFitter
-            befores = load_references(snap["before"])
-            afters = load_references(snap["after"])
-            n = min(len(befores), len(afters))
-            report(30)
-            look = PairsFitter(size=DEFAULT_SIZE).fit_from_pairs(befores[:n], afters[:n])
-        elif mode == "references":
-            # References (copy a look): transport the base toward the references' colour distribution.
-            consensus = build_consensus(compute_stats_batch(load_references(snap["after"])))
-            report(30)
-            look = RichFitter(tone_strength=snap["tone"]).fit(consensus)
-        else:
-            # Neutral + Graded: transport the neutral pool toward the graded pool.
-            consensus = build_consensus(compute_stats_batch(load_references(snap["after"])))
-            report(30)
-            src = np.concatenate([i.reshape(-1, 3) for i in load_references(snap["before"])])
-            if src.shape[0] > 200_000:
-                src = src[np.random.default_rng(0).choice(src.shape[0], 200_000, replace=False)]
-            look = RichFitter(tone_strength=snap["tone"]).fit(consensus, source_samples=src)
-        report(60)
-        return look(self._base)
+        consensus = build_consensus(compute_stats_batch(load_references(snap["after"])))
+        report(30)
+        src = np.concatenate([i.reshape(-1, 3) for i in load_references(snap["before"])])
+        if src.shape[0] > 200_000:
+            src = src[np.random.default_rng(0).choice(src.shape[0], 200_000, replace=False)]
+        look = RichFitter(tone_strength=snap["tone"]).fit(consensus, source_samples=src)
+        moved = look(src)
+        report(55)
+        grade = learn_grade_cube_bounded(src, moved, DEFAULT_SIZE, smoothing=0.025)
+        return apply_cube(self._base, grade, DEFAULT_SIZE)
 
     def _placement_key(self) -> str:
         return "between" if self._placement.currentIndex() == 1 else "node2"
@@ -410,7 +382,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _snapshot(self, refit: bool) -> dict:
         return dict(
-            refit=refit, mode=self._mode_key(),
+            refit=refit,
             before=list(self._before), after=list(self._after),
             tone=self._tone_value(),
             strength=self._strength_value(), still=self._still, placement=self._placement_key(),
@@ -509,35 +481,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # — slots (no auto-compute; everything just marks "changes pending") —
     def _sync_mode_labels(self) -> None:
-        refs = self._is_references()
-        # references mode = look images only → hide the "before"/neutral list
-        for w in (self._before_lbl_w, self._before_list, self._before_add, self._before_rm):
-            w.setVisible(not refs)
-        if refs:
-            self._after_lbl_w.setText("Reference look images (the film/look to copy)")
-            self._after_add.setText("+ Add reference look images…")
-            self._mode_hint.setText("Copy a look: add stills of the film/look you want. Your footage "
-                                    "takes their colour character. NOT a pixel copy — different scenes "
-                                    "→ the feel transfers, not the image. Tone/Strength tune it.")
-        elif self._is_pairs():
-            self._before_lbl_w.setText("BEFORE frames (your footage, ungraded)")
-            self._after_lbl_w.setText("AFTER frames (the SAME frames, graded)")
-            self._before_add.setText("+ Add BEFORE (ungraded)…")
-            self._after_add.setText("+ Add AFTER (graded)…")
-            self._mode_hint.setText("Pairs learn the EXACT grade. Add matched frames: each BEFORE "
-                                    "is the same shot as the AFTER at the same index. Equal counts "
-                                    "(extras ignored). Tone/Strength still apply.")
-        else:
-            self._before_lbl_w.setText("NEUTRAL images (your ungraded footage)")
-            self._after_lbl_w.setText("GRADED images (the target look)")
-            self._before_add.setText("+ Add NEUTRAL (your footage)…")
-            self._after_add.setText("+ Add GRADED (the look)…")
-            self._mode_hint.setText("Unpaired pools: add NEUTRAL frames + GRADED frames. Different "
-                                    "scenes OK, counts need not match. Transports your neutral colors "
-                                    "toward the graded look.")
-
-    def _on_mode(self, _=None) -> None:
-        self._sync_mode_labels(); self._mark_dirty()
+        self._before_lbl_w.setText("NEUTRAL frames (your ungraded footage)")
+        self._after_lbl_w.setText("GRADED reference (the film/look)")
+        self._before_add.setText("+ Add NEUTRAL (your footage)…")
+        self._after_add.setText("+ Add GRADED (the film look)…")
+        self._mode_hint.setText("Before/After foundation: add NEUTRAL frames (your footage) + GRADED "
+                                "frames (the film look). Builds one cube — your foundation. Apply to "
+                                "all clips, then tweak each. Neutral should represent your footage.")
 
     # — conversion: DaVinci base vs film-print PFE base —
     def _film_exposure_value(self) -> float:
