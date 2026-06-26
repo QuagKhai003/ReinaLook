@@ -99,8 +99,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # rebuilding the look cube per slider tick lagged; fire ~180ms after the last change.
         self._preview_timer = QtCore.QTimer(self, singleShot=True, interval=180)
         self._preview_timer.timeout.connect(self._do_refresh)
-        self._base_timer = QtCore.QTimer(self, singleShot=True, interval=250)   # debounce PFE rebuild
-        self._base_timer.timeout.connect(self._rebuild_base)
 
         self._build_ui()
         self._sync_mode_labels()
@@ -147,26 +145,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._placement.addItems(["Replace CSTout", "Between CSTs"])
         self._placement.currentIndexChanged.connect(self._on_placement)
 
-        # conversion: DaVinci CST (default base) or a film-print PFE LUT (DWG/DI→Cineon→PFE→Rec.709)
-        self._conversion = QtWidgets.QComboBox()
-        self._conversion.addItems(["DaVinci CST (Resolve)", "Film print (PFE LUT)"])
-        self._conversion.currentIndexChanged.connect(self._on_conversion)
-        self._pfe_btn = QtWidgets.QPushButton("Load PFE .cube…")
-        self._pfe_btn.clicked.connect(self._load_pfe)
-        self._pfe_btn.setEnabled(False)
-        self._pfe_path: str | None = None
-        self._film_exposure = self._slider(50, self._on_film_exposure)   # 0..100 → −2..+2 stops
-        self._film_exposure.setEnabled(False)
-        self._film_exposure_lbl = QtWidgets.QLabel("Film exposure: 0.0 stop")
-
+        # conversion is fixed: the DaVinci CST base (DWG/DI → Rec.709).
         self._tone = self._slider(100, self._on_tone)
         self._tone_lbl = QtWidgets.QLabel("Tone (exposure match): 1.00")
         self._strength = self._slider(80, self._on_strength)
         self._strength_lbl = QtWidgets.QLabel("Strength: 0.80")
 
         form = QtWidgets.QFormLayout()
-        form.addRow("Conversion", self._conversion)
-        form.addRow("", self._pfe_btn)
         form.addRow("Placement", self._placement)
 
         film_box = self._build_film_panel()
@@ -182,8 +167,6 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addWidget(self._pairs_page)
         left.addSpacing(8)
         left.addLayout(form)
-        left.addWidget(self._film_exposure_lbl)
-        left.addWidget(self._film_exposure)
         left.addWidget(self._tone_lbl)
         left.addWidget(self._tone)
         left.addWidget(self._strength_lbl)
@@ -489,54 +472,6 @@ class MainWindow(QtWidgets.QMainWindow):
                                 "frames (the film look). Builds one cube — your foundation. Apply to "
                                 "all clips, then tweak each. Neutral should represent your footage.")
 
-    # — conversion: DaVinci base vs film-print PFE base —
-    def _film_exposure_value(self) -> float:
-        return (self._film_exposure.value() - 50) / 25.0   # 0..100 → −2..+2 stops
-
-    def _is_film_print(self) -> bool:
-        return self._conversion.currentIndex() == 1 and self._pfe_path is not None
-
-    def _rebuild_base(self) -> None:
-        """Set self._base to the DaVinci base or the film-print PFE base, then recompute the preview
-        'before' (base-converted still). Any look must be recomputed (base changed) → mark dirty.
-        Building the film base applies the PFE to the 65-point grid (~0.5s) — show a wait cursor."""
-        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
-        try:
-            if self._is_film_print():
-                from lutgen.engine.filmprint import build_film_base
-                try:
-                    self._base = build_film_base(self._pfe_path, DEFAULT_SIZE, self._film_exposure_value())
-                except Exception as exc:
-                    QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not build film base:\n{exc}")
-                    return
-            else:
-                self._base = load_base()
-            self._before_img = apply_cube(self._still, self._base)
-        finally:
-            QtWidgets.QApplication.restoreOverrideCursor()
-        self._mark_dirty()                        # look is fit on the base → rebuild on Compute
-        self._refresh_preview()
-
-    def _on_conversion(self, _=None) -> None:
-        film = self._conversion.currentIndex() == 1
-        self._pfe_btn.setEnabled(film)
-        self._film_exposure.setEnabled(film)
-        # film print is a Replace-CSTout conversion; Between uses the DaVinci inverse (force node2)
-        self._placement.setEnabled(not film)
-        if film:
-            self._placement.setCurrentIndex(0)
-        self._rebuild_base()
-
-    def _load_pfe(self) -> None:
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load PFE .cube (Cineon-input)", "", "Cube (*.cube)")
-        if path:
-            self._pfe_path = path
-            self._rebuild_base()
-
-    def _on_film_exposure(self, _=None) -> None:
-        self._film_exposure_lbl.setText(f"Film exposure: {self._film_exposure_value():+.1f} stop")
-        if self._is_film_print():
-            self._base_timer.start()              # debounced: rebuild once dragging stops
 
     def _on_placement(self, _=None) -> None:
         self._refresh_preview()                   # changes the look image → rebuild endpoints (once)
