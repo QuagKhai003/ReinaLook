@@ -57,6 +57,9 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--film-bleach", type=float, default=0.0, help="0..1 desaturate highlights to white")
     r.add_argument("--film-split", type=float, default=0.0, help="-1 cool-hi/warm-lo .. +1 warm-hi/cool-lo")
     r.add_argument("--film-saturation", type=float, default=0.0, help="-1 grey .. +1 vivid")
+    # film-print conversion (Opt 3): replace the DaVinci CST with DWG/DI->Cineon->PFE->Rec.709
+    r.add_argument("--pfe", default=None, help="film print emulation .cube (Cineon-input, e.g. 2383)")
+    r.add_argument("--pfe-exposure", type=float, default=0.0, help="film exposure offset in stops")
     r.add_argument("--preset", default=None, help="load refs/strength/title from a preset JSON")
     r.add_argument("--save-preset", default=None, help="write the settings used to a preset JSON")
     r.add_argument("--max-dim", type=int, default=1024, help="downscale refs to this max side")
@@ -100,19 +103,25 @@ def _cmd_render(args: argparse.Namespace) -> int:
         contrast=args.film_contrast, toe=args.film_toe, shoulder=args.film_shoulder,
         highlight_bleach=args.film_bleach, split_warm=args.film_split, saturation=args.film_saturation,
     )
-    if not refs and adjust.is_identity() and film.is_identity():
-        print("error: nothing to do — pass --refs, --preset, or some --contrast/--film-*/…",
+    if not refs and adjust.is_identity() and film.is_identity() and not args.pfe:
+        print("error: nothing to do — pass --refs, --preset, --pfe, or some --contrast/--film-*/…",
               file=sys.stderr)
         return 2
+    base = None
+    if args.pfe:                          # film-print conversion (Opt 3)
+        from lutgen.engine.filmprint import build_film_base
+        base = build_film_base(args.pfe, exposure=args.pfe_exposure)
     kwargs = {} if args.tone is None else {"tone_strength": args.tone}
     fitter = RichFitter(**kwargs)         # fixed: Rich / pdf / Oklab
     if args.source:                       # unpaired neutral→graded transport (ADR-0016)
         cube = render_cube_dual(args.source, refs, strength, fitter=fitter, title=title,
-                                placement=args.placement, adjust=adjust, film=film, max_dim=args.max_dim)
+                                placement=args.placement, adjust=adjust, film=film, base=base,
+                                max_dim=args.max_dim)
         note = f"{len(args.source)} source + {len(refs)} target"
     else:
         cube = render_cube(refs, strength, title=title, fitter=fitter,
-                           placement=args.placement, adjust=adjust, film=film, max_dim=args.max_dim)
+                           placement=args.placement, adjust=adjust, film=film, base=base,
+                           max_dim=args.max_dim)
         note = f"{len(refs)} refs" if refs else "manual grade (no refs)"
     write_cube(args.out, cube.samples, cube.size, title=cube.title)
     if args.save_preset:

@@ -39,16 +39,18 @@ def _post(looked: np.ndarray, film: FilmStock | None, adjust: Adjustments | None
     return looked
 
 
-def _assemble(looked_full: np.ndarray, strength: float, placement: str, size: int) -> np.ndarray:
+def _assemble(looked_full: np.ndarray, strength: float, placement: str, size: int,
+              base: np.ndarray | None = None) -> np.ndarray:
     """Turn a full-strength looked-base (Rec.709) into the final cube samples for the chosen
-    placement, blended by ``strength``.
+    placement, blended by ``strength``. ``base`` overrides the conversion (e.g. a film-print base);
+    defaults to the DaVinci base. ``between`` always uses the DaVinci inverse, so it is only exact
+    for the DaVinci base — film-print conversions should use ``node2`` (Replace CSTout).
 
     - ``"node2"`` (replace Node 2): DWG/DI → Rec.709 + look. ``strength=0`` → base, bit-for-bit.
-    - ``"between"`` (between Node 1 & 2): DWG/DI → DWG/DI look only; Node 2 still converts after, so
-      brightness/contrast/saturation are preserved. The full look is mapped back to DWG/DI via the
-      inverse base cube, then blended with the identity grid. ``strength=0`` → identity (pass-through).
+    - ``"between"`` (between Node 1 & 2): DWG/DI → DWG/DI look only; Node 2 still converts after.
     """
-    base = load_base(size)
+    if base is None:
+        base = load_base(size)
     if placement == "between":
         # map the look back to DWG/DI via the higher-res inverse (applied at its own size)
         dwgdi_full = apply_cube(regularize(looked_full, size), load_base_inverse(), INVERSE_SIZE)
@@ -65,14 +67,17 @@ def render_cube(
     placement: str = "node2",
     adjust: Adjustments | None = None,
     film: FilmStock | None = None,
+    base: np.ndarray | None = None,
     max_dim: int | None = 1024,
     size: int = DEFAULT_SIZE,
 ) -> Cube:
     """Build a finished `.cube`. References optional — with ``ref_paths`` empty this is a pure
-    manual grade (``adjust``) / film transfer (``film``) over the base. Steps: refs → consensus →
-    fit → sample on base → ``film`` → ``adjust`` → assemble for ``placement`` → blend by strength.
+    manual grade (``adjust``) / film transfer (``film``) over the base. ``base`` overrides the
+    conversion (e.g. a film-print PFE base). Steps: refs → consensus → fit → sample on base →
+    ``film`` → ``adjust`` → assemble for ``placement`` → blend by strength.
     """
-    base = load_base(size)
+    if base is None:
+        base = load_base(size)
     if ref_paths:
         fitter = fitter or RichFitter()
         images = load_references(ref_paths, max_dim=max_dim)
@@ -82,7 +87,7 @@ def render_cube(
         looked = base.copy()                 # manual-only: film/adjustments over the base
 
     looked = _post(looked, film, adjust)
-    final = _assemble(looked, strength, placement, size)
+    final = _assemble(looked, strength, placement, size, base=base)
     return Cube(size=size, samples=final, title=title)
 
 
@@ -96,19 +101,21 @@ def render_cube_dual(
     placement: str = "node2",
     adjust: Adjustments | None = None,
     film: FilmStock | None = None,
+    base: np.ndarray | None = None,
     max_dim: int | None = 1024,
     size: int = DEFAULT_SIZE,
     sample_cap: int = 200_000,
 ) -> Cube:
     """Transport a NEUTRAL pool toward a GRADED pool (ADR-0016); ``placement`` node2/between (ADR-0017).
+    ``base`` overrides the conversion (e.g. a film-print PFE base).
 
     `source_paths` = neutral images (your ungraded footage), `target_paths` = graded images (the
-    look). Unpaired, any counts. The fitter (Mid/Rich, mkl/pdf) transports the source colour
-    distribution onto the target's, calibrated on real neutral footage rather than a uniform source.
-    Learned transform is applied to the protected base, then blended. `strength = 0` returns the base.
+    look). Unpaired, any counts. The learned transform is applied to the base, then blended.
+    `strength = 0` returns the base.
     """
     fitter = fitter or RichFitter()
-    base = load_base(size)
+    if base is None:
+        base = load_base(size)
 
     targets = load_references(target_paths, max_dim=max_dim)
     consensus = build_consensus(compute_stats_batch(targets))
@@ -130,7 +137,7 @@ def render_cube_dual(
     grade = learn_grade_cube(source_pixels, moved, size, smoothing=0.025, min_weight=1e-3)
     look_samples = apply_cube(base, grade, size)
     look_samples = _post(look_samples, film, adjust)
-    final = _assemble(look_samples, strength, placement, size)
+    final = _assemble(look_samples, strength, placement, size, base=base)
     return Cube(size=size, samples=final, title=title)
 
 
