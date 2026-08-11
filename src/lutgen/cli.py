@@ -2,7 +2,8 @@
 
 @context  `lutgen render --refs ... --strength ... --out ...`; preset save/load. Thin wrapper
           over orchestration.pipeline — no color math here.
-@done     render command, preset load/save, main(argv).
+@done     render command, preset load/save, main(argv); v2 learn/apply subcommands (ADR-0001):
+          learn refs -> Look Profile JSON, apply profile -> .cube (both placements).
 @todo     GUI is M5 (separate).
 @limits   Base stays protected (strength=0 -> base). Out cube already regularized; written as-is.
 @affects  Console entry point `lutgen = lutgen.cli:main`. Uses orchestration.pipeline + preset +
@@ -15,8 +16,8 @@ import argparse
 import sys
 
 from lutgen.engine.adjust import Adjustments
-from lutgen.engine.film import FilmStock
 from lutgen.engine.cube_io import write_cube
+from lutgen.engine.film import FilmStock
 from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.pipeline import (
     render_cube,
@@ -24,7 +25,6 @@ from lutgen.orchestration.pipeline import (
     render_cube_from_pairs,
 )
 from lutgen.orchestration.preset import load_preset, save_preset
-
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -78,6 +78,23 @@ def _build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--out", "-o", required=True, help="output .cube path")
     rp.add_argument("--title", default=None, help="cube TITLE")
     rp.add_argument("--max-dim", type=int, default=1024, help="downscale frames to this max side")
+
+    # v2 Learn/Apply (ADR-0001): learn a film-shaped recipe once, apply it forever
+    ln = sub.add_parser("learn", help="learn a film-shaped Look Profile from graded reference frames")
+    ln.add_argument("--refs", nargs="+", required=True, help="graded reference frames (5-15 varied)")
+    ln.add_argument("--out", "-o", required=True, help="output profile JSON path")
+    ln.add_argument("--name", default=None, help="profile name (default: output filename)")
+    ln.add_argument("--fast", action="store_true",
+                    help="quick draft fit (smaller sample cloud, capped iterations)")
+    ln.add_argument("--max-dim", type=int, default=1024, help="downscale refs to this max side")
+
+    ap = sub.add_parser("apply", help="bake a saved Look Profile into a .cube")
+    ap.add_argument("--profile", required=True, help="Look Profile JSON (from `learn`)")
+    ap.add_argument("--strength", type=float, default=1.0, help="look strength 0..1 (default 1.0)")
+    ap.add_argument("--placement", choices=["node2", "between"], default="node2",
+                    help="node2: replace Node 2; between: DWG/DI look between Node 1&2")
+    ap.add_argument("--out", "-o", required=True, help="output .cube path")
+    ap.add_argument("--title", default=None, help="cube TITLE (default: profile name)")
     return parser
 
 
@@ -144,12 +161,51 @@ def _cmd_render_pairs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_learn(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from lutgen.fitter.fit import FitOptions
+    from lutgen.orchestration.learn import frame_count_hint, learn_profile
+    from lutgen.orchestration.profile import save_profile
+
+    print(frame_count_hint(len(args.refs)))
+    options = FitOptions(n_samples=1200, max_nfev=30) if args.fast else None
+    profile = learn_profile(
+        args.refs,
+        name=args.name or Path(args.out).stem,
+        max_dim=args.max_dim,
+        options=options,
+        progress=lambda stage: print(f"fitting: {stage}"),
+    )
+    save_profile(args.out, profile)
+    cost = ", ".join(f"{k} {v:.4g}" for k, v in profile.stage_cost.items())
+    print(f"wrote {args.out}  (learned from {profile.n_frames} frames; fit cost: {cost})")
+    return 0
+
+
+def _cmd_apply(args: argparse.Namespace) -> int:
+    from lutgen.orchestration.learn import render_cube_from_profile
+    from lutgen.orchestration.profile import load_profile
+
+    profile = load_profile(args.profile)
+    cube = render_cube_from_profile(profile, args.strength,
+                                    title=args.title or profile.name, placement=args.placement)
+    write_cube(args.out, cube.samples, cube.size, title=cube.title)
+    where = "between Node 1&2" if args.placement == "between" else "replace Node 2"
+    print(f"wrote {args.out}  ({where}, profile '{profile.name}', strength {args.strength})")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "render":
         return _cmd_render(args)
     if args.command == "render-pairs":
         return _cmd_render_pairs(args)
+    if args.command == "learn":
+        return _cmd_learn(args)
+    if args.command == "apply":
+        return _cmd_apply(args)
     return 1
 
 
