@@ -3,9 +3,10 @@
 @context  Wires widgets to the tested fitters: references OR before/after pairs, fitter/method/
           space/tone/strength controls, before/after preview, export, save preset. No color math
           here (Plan §3, ADR-0007/0014).
-@done     MainWindow: references + pairs modes; Mid/Rich(mkl|pdf, oklab|rgb) controls; tone +
-          strength sliders; live preview; export; save preset.
-@todo     Thumbnails, drag-drop, packaging (PyInstaller).
+@done     MainWindow: Learn (v2) + Foundation (legacy) tabs; before/after pairs foundation;
+          tone + strength sliders; live preview; export. Shared worker via app/worker.py.
+@todo     Apply tab + profile library (ADR-0002 b2.2); recipe editor (b2.3); full mode
+          restructure incl. Match tab naming (b2.4). Thumbnails, drag-drop.
 @limits   Imports PySide6 (only when the GUI runs). Look refit on any look control; re-blend on strength.
 @affects  Uses fitters (mid/rich/pairs), engine.base/strength/regularize, app.preview, preset.
           Launched by app/run.py. See ADR-0007/0014.
@@ -19,8 +20,6 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from lutgen.engine.apply import apply_cube
 from lutgen.engine.base import DEFAULT_SIZE, load_base
 from lutgen.engine.cube_io import write_cube
-from lutgen.engine.regularize import regularize
-from lutgen.engine.strength import blend
 from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.consensus import build_consensus
 from lutgen.orchestration.ingest import load_references
@@ -50,21 +49,8 @@ def _to_pixmap(img: np.ndarray) -> QtGui.QPixmap:
     return QtGui.QPixmap.fromImage(qimg)
 
 
-class _ComputeThread(QtCore.QThread):
-    """Run the (possibly heavy) look + preview computation off the UI thread."""
-
-    done = QtCore.Signal(object)    # result tuple or Exception
-    progress = QtCore.Signal(int)   # 0..100
-
-    def __init__(self, fn):
-        super().__init__()
-        self._fn = fn
-
-    def run(self):
-        try:
-            self.done.emit(self._fn(self.progress.emit))   # fn receives a report(pct) callback
-        except Exception as exc:   # report back to the UI thread
-            self.done.emit(exc)
+# the shared worker thread (app/worker.py); legacy alias kept for this page's call sites
+from .worker import ComputeThread as _ComputeThread
 
 
 def _file_list():
@@ -205,7 +191,16 @@ class MainWindow(QtWidgets.QMainWindow):
         root.addWidget(scroll)
         root.addLayout(preview, 1)
         self._central = QtWidgets.QWidget(); self._central.setLayout(root)
-        self.setCentralWidget(self._central)
+
+        # top-level modes (ADR-0002): Learn (v2 profile workflow) + the legacy foundation page.
+        # Apply tab lands in b2.2; full mode restructure in b2.4.
+        from .learn_tab import LearnTab
+
+        self._learn_tab = LearnTab()
+        self._tabs = QtWidgets.QTabWidget()
+        self._tabs.addTab(self._learn_tab, "Learn (v2)")
+        self._tabs.addTab(self._central, "Foundation (legacy)")
+        self.setCentralWidget(self._tabs)
 
     def _slider(self, value, slot):
         s = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -258,13 +253,14 @@ class MainWindow(QtWidgets.QMainWindow):
         return self._final_at(self._strength_value())
 
     def _snapshot(self, refit: bool) -> dict:
-        return dict(
-            refit=refit,
-            before=list(self._before), after=list(self._after),
-            tone=self._tone_value(),
-            strength=self._strength_value(), still=self._still, placement=self._placement_key(),
-            still_dirty=self._still_dirty, look=self._look_samples,
-        )
+        return {
+            "refit": refit,
+            "before": list(self._before), "after": list(self._after),
+            "tone": self._tone_value(),
+            "strength": self._strength_value(), "still": self._still,
+            "placement": self._placement_key(),
+            "still_dirty": self._still_dirty, "look": self._look_samples,
+        }
 
     # — the worker payload (runs in _ComputeThread): builds the heavy LOOK only —
     def _compute(self, snap, report):
@@ -415,7 +411,7 @@ class MainWindow(QtWidgets.QMainWindow):
             try:                                    # ensure the look is current before export
                 self._set_busy(True); QtWidgets.QApplication.processEvents()
                 self._look_samples = self._build_look(self._snapshot(True), lambda _p: None)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — UI boundary: any failure becomes a dialog
                 QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not build look:\n{exc}")
             finally:
                 self._set_busy(False)
