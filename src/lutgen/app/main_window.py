@@ -3,10 +3,10 @@
 @context  Wires widgets to the tested fitters: references OR before/after pairs, fitter/method/
           space/tone/strength controls, before/after preview, export, save preset. No color math
           here (Plan §3, ADR-0007/0014).
-@done     MainWindow: Learn (v2) + Foundation (legacy) tabs; before/after pairs foundation;
-          tone + strength sliders; live preview; export. Shared worker via app/worker.py.
-@todo     Apply tab + profile library (ADR-0002 b2.2); recipe editor (b2.3); full mode
-          restructure incl. Match tab naming (b2.4). Thumbnails, drag-drop.
+@done     MainWindow: Learn (v2) + Apply (v2) + Foundation (legacy) tabs; before/after pairs
+          foundation; tone + strength sliders; live preview; export. Shared helpers via
+          app/worker.py + app/qt_image.py.
+@todo     Recipe editor (ADR-0002 b2.3); mode restructure polish (b2.4). Thumbnails, drag-drop.
 @limits   Imports PySide6 (only when the GUI runs). Look refit on any look control; re-blend on strength.
 @affects  Uses fitters (mid/rich/pairs), engine.base/strength/regularize, app.preview, preset.
           Launched by app/run.py. See ADR-0007/0014.
@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import numpy as np
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from lutgen.engine.apply import apply_cube
 from lutgen.engine.base import DEFAULT_SIZE, load_base
@@ -32,24 +32,9 @@ _IMG_FILTER = "Images (*.png *.jpg *.jpeg *.tif *.tiff *.exr)"
 _PREVIEW_W = 520
 _DEBOUNCE_MS = 2000   # wait this long after the LAST slider/control change, then compute
 
-
-_DITHER = np.random.default_rng(0).uniform(-0.5, 0.5, (2160, 3840, 1))  # fixed triangular-ish dither
-
-
-def _to_pixmap(img: np.ndarray) -> QtGui.QPixmap:
-    # The preview is 8-bit (Qt displays 8-bit), so smooth gradients band on screen even though the
-    # exported 65-point cube is smooth. Add ±0.5-level dither before quantizing to hide the banding
-    # — purely cosmetic, makes the preview match how Resolve renders the cube on real footage.
-    img = np.clip(img, 0.0, 1.0) * 255.0
-    h, w = img.shape[:2]
-    if h <= _DITHER.shape[0] and w <= _DITHER.shape[1]:
-        img = img + _DITHER[:h, :w]
-    arr = np.ascontiguousarray(np.clip(np.round(img), 0, 255).astype(np.uint8))
-    qimg = QtGui.QImage(arr.data, w, h, 3 * w, QtGui.QImage.Format.Format_RGB888).copy()
-    return QtGui.QPixmap.fromImage(qimg)
-
-
-# the shared worker thread (app/worker.py); legacy alias kept for this page's call sites
+# shared helpers: worker thread (app/worker.py) + dithered pixmap (app/qt_image.py);
+# legacy aliases kept for this page's call sites
+from .qt_image import to_pixmap as _to_pixmap
 from .worker import ComputeThread as _ComputeThread
 
 
@@ -192,13 +177,16 @@ class MainWindow(QtWidgets.QMainWindow):
         root.addLayout(preview, 1)
         self._central = QtWidgets.QWidget(); self._central.setLayout(root)
 
-        # top-level modes (ADR-0002): Learn (v2 profile workflow) + the legacy foundation page.
-        # Apply tab lands in b2.2; full mode restructure in b2.4.
+        # top-level modes (ADR-0002): Learn + Apply (v2 profile workflow) + the legacy
+        # foundation page. Full mode restructure/polish in b2.4.
+        from .apply_tab import ApplyTab
         from .learn_tab import LearnTab
 
         self._learn_tab = LearnTab()
+        self._apply_tab = ApplyTab()
         self._tabs = QtWidgets.QTabWidget()
         self._tabs.addTab(self._learn_tab, "Learn (v2)")
+        self._tabs.addTab(self._apply_tab, "Apply (v2)")
         self._tabs.addTab(self._central, "Foundation (legacy)")
         self.setCentralWidget(self._tabs)
 
