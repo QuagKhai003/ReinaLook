@@ -4,7 +4,8 @@
           model that scipy fits (ADR-0001). This package is the PURE forward transform the
           fitter solves for: A crosstalk -> B per-channel S-curves -> C sat-vs-luma (Oklab)
           -> D hue-zone trims (Oklab), all in DWG/DI working space.
-@done     Blocks A (crosstalk), B (scurve), C (satluma), D (huezone); FilmModel (A->B->C->D).
+@done     Blocks A (crosstalk), B (scurve), C (satluma), D (huezone); FilmModel (A->B->C->D);
+          serialize.py (params <-> dict for the Look Profile).
 @todo     Staged fit (1.4); Look Profile (de)serialization (1.5). Wire into LookFitter seam.
 @limits   PURE: no IO, no network, no AI. Vectorized NumPy over (...,3) float64. Neutral params
           return the input BIT-FOR-BIT (identity@0) so strength=0 stays the sacred base.
