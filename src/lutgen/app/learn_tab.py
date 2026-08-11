@@ -4,9 +4,10 @@
           sees honest frame-count guidance inline (colored, no modal nagging), runs the staged
           fit on a worker thread (per-stage progress + Cancel), reads the learned recipe as
           text, and saves the profile JSON.
-@done     LearnTab widget: pool list + add/remove, colored frame_count_hint, draft-fit
-          checkbox, threaded learn with stage progress + stage-granular Cancel, recipe
-          summary, save-profile dialog.
+@done     LearnTab widget: pool list + add/remove (tooltips carry full paths), colored
+          frame_count_hint, draft-fit checkbox, threaded learn with stage progress +
+          stage-granular Cancel, recipe summary, save-profile dialog. Pooled-stats cache
+          keyed by the pool (spec §9): re-Learn with unchanged frames skips ingest+stats.
 @todo     Recipe EDITING is 2.3; profile library / Apply side is 2.2.
 @limits   GUI-only (Qt); no color math — calls orchestration/learn + profile only. Cancel is
           cooperative at stage boundaries (tone/crosstalk/huesat), granular enough for a
@@ -20,7 +21,7 @@ from __future__ import annotations
 from PySide6 import QtWidgets
 
 from lutgen.fitter.fit import FitOptions
-from lutgen.orchestration.learn import frame_count_hint, learn_profile
+from lutgen.orchestration.learn import frame_count_hint, learn_profile, pool_targets
 from lutgen.orchestration.profile import LookProfile, save_profile
 
 from .recipe import recipe_summary
@@ -50,6 +51,9 @@ class LearnTab(QtWidgets.QWidget):
         self._profile: LookProfile | None = None
         self._thread: ComputeThread | None = None
         self._cancel = False
+        # spec §9 caching: pooled stats recompute only when the POOL changes — a re-Learn
+        # (e.g. draft -> full quality) with the same frames skips ingest + statistics.
+        self._targets_cache: tuple[tuple[str, ...], object] | None = None
         self._build_ui()
         self._update_hint()
 
@@ -114,7 +118,10 @@ class LearnTab(QtWidgets.QWidget):
         new = [p for p in paths if p not in self._paths]
         if new:
             self._paths.extend(new)
-            self._list.addItems(new)
+            for p in new:                              # tooltip = full path (list may elide)
+                item = QtWidgets.QListWidgetItem(p)
+                item.setToolTip(p)
+                self._list.addItem(item)
             self._update_hint()
 
     def _remove(self) -> None:
@@ -152,7 +159,15 @@ class LearnTab(QtWidgets.QWidget):
             if self._cancel:
                 raise Cancelled()
             self._thread.stage.emit(stage)
-        return learn_profile(paths, name="untitled", options=options, progress=progress)
+
+        key = tuple(paths)
+        if self._targets_cache is not None and self._targets_cache[0] == key:
+            targets = self._targets_cache[1]           # unchanged pool -> skip ingest+stats
+        else:
+            targets = pool_targets(paths)
+            self._targets_cache = (key, targets)
+        return learn_profile(paths, name="untitled", options=options, progress=progress,
+                             targets=targets)
 
     def _on_stage(self, stage: str) -> None:
         self._stage_lbl.setText(_STAGE_TEXT.get(stage, stage))
