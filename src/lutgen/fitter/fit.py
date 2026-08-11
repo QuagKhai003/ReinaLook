@@ -8,7 +8,9 @@
           targets. STAGED (non-negotiable): tone curves first, then crosstalk, then C/D —
           each stage freezes the previous ones. Fitting all params at once is not stable.
 @done     FitOptions, FitResult, fit_film_model (3 staged bounded scipy least_squares),
-          synth_samples (deterministic source cloud).
+          synth_samples (deterministic source cloud), exposure alignment of the prior world
+          (ADR-0003: scene brightness is content — the assumed world's median exposure is
+          matched to the pool's so tone curves learn SHAPE; real source pools never rescaled).
 @todo     Global exposure/black trims (spec budget) if acceptance shows they're needed.
           Outlier frame down-weighting (poolstats @todo) — evaluate on real pools.
 @limits   PURE numeric: no file IO beyond the bundled base assets via engine/base (allowed by
@@ -24,7 +26,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
@@ -72,6 +74,9 @@ class FitOptions:
     tone_anchor_weight: float = 0.3   # stage 2/3: soft anchor keeping stage-1 tone in place
     max_nfev: int | None = None       # per stage; None = scipy default
     diff_step: float = 1e-3           # finite-difference step (quantile stats are piecewise)
+    exposure_align: bool = True       # prior path only: match the assumed world's exposure to
+                                      # the pool's (scene brightness is content, not grade —
+                                      # ADR-0003; a real user source pool is never rescaled)
 
 
 @dataclass
@@ -82,6 +87,23 @@ class FitResult:
     stage_cost: dict = field(default_factory=dict)      # stage -> final 0.5*sum(residual^2)
     stage_nfev: dict = field(default_factory=dict)      # stage -> function evaluations
     n_frames: int = 0                                   # frames behind the targets
+
+
+# ── exposure alignment (ADR-0003 R.2) ─────────────────────────────────
+
+def _exposure_aligned(src: PooledTargets, ref: PooledTargets) -> PooledTargets:
+    """Give the assumed source world the POOL'S OWN luma distribution (neutral: identical per
+    channel). Scene brightness — including its whole distribution shape, not just a level —
+    is content, not grade; a screenshot-only pool cannot reveal the absolute tone reshape
+    (spec's hard truth), and pretending it can slams the tone stage into its bounds
+    (observed twice on a real pool: slope 2.00/0.70 pinned, then 0.50 after naive scaling).
+    What REMAINS learnable — and now is exactly what the tone stage fits — is the per-channel
+    DEVIATION from the common luma curve (film's channel-different tone drift), plus every
+    colour block on top, all at matched exposure per band."""
+    aligned = replace(src)
+    luma_q = ref.channel_quantiles.mean(axis=0)      # the pool's tone distribution
+    aligned.channel_quantiles = np.tile(np.clip(luma_q, 0.0, 1.0), (3, 1))
+    return aligned
 
 
 # ── source cloud ──────────────────────────────────────────────────────
@@ -200,7 +222,12 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     reproduces the reference pool's statistics. Staged: tone -> crosstalk -> hue/sat detail,
     each stage bounded and ridge-pulled toward neutral (per-region regularization)."""
     opt = options or FitOptions()
-    src_targets = source if source is not None else neutral_prior()
+    if source is not None:
+        src_targets = source                      # a real measured pool is never rescaled
+    else:
+        src_targets = neutral_prior()
+        if opt.exposure_align:
+            src_targets = _exposure_aligned(src_targets, ref)
 
     cloud = synth_samples(src_targets, opt.n_samples, opt.seed)
     inv = _cube_fn(load_base_inverse(), INVERSE_SIZE)
