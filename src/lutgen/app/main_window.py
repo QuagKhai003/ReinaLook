@@ -198,6 +198,7 @@ class MainWindow(QtWidgets.QMainWindow):
         last = int(settings.value("last_mode", 0))
         self._tabs.setCurrentIndex(last if 0 <= last < self._tabs.count() else 0)
         self._on_mode_changed(self._tabs.currentIndex())
+        self.setMinimumSize(900, 560)   # below this, panes clip — the window won't shrink past it
 
     def _on_mode_changed(self, index: int) -> None:
         """Window title follows the mode; the choice persists across sessions."""

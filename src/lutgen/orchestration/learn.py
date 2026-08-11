@@ -3,7 +3,8 @@
 @context  The two-phase product shape (spec §4): LEARN a film-shaped recipe from 5-15 graded
           frames once, then APPLY any saved profile to bake a .cube. This module wires
           ingest -> poolstats -> fit (learn) and profile -> FilmModel -> grid bake (apply).
-@done     learn_profile(ref_paths) -> LookProfile; render_cube_from_profile(profile) -> Cube;
+@done     learn_profile(ref_paths, targets=...) -> LookProfile; pool_targets (the cacheable
+          ingest+stats half — spec §9 caching seam); render_cube_from_profile(profile) -> Cube;
           frame_count_hint (the single-image wall, surfaced per spec §4); validate_baked_cube
           + diagnose_model (§6 stress gate with per-block attribution — the CLI export gate).
 @todo     Source-adaptive white-balance trim in Apply (Phase 4).
@@ -46,6 +47,15 @@ def frame_count_hint(n: int) -> str:
     return f"{n} frames: excellent — about as close as physics allows without the negative."
 
 
+def pool_targets(ref_paths, *, max_dim: int | None = 1024):
+    """Load a reference pool and compute its pooled Learn targets (the ingest+stats half of
+    learn_profile). Split out so callers can CACHE it — the spec §9 rule: pooled statistics
+    are recomputed only when the pool changes, never per fit/dial (a re-Learn with an
+    unchanged pool skips straight to the fit)."""
+    images = load_references(ref_paths, max_dim=max_dim)
+    return pool_stats([compute_frame_stats(img) for img in images])
+
+
 def learn_profile(
     ref_paths,
     *,
@@ -53,14 +63,16 @@ def learn_profile(
     max_dim: int | None = 1024,
     options: FitOptions | None = None,
     progress: ProgressFn | None = None,
+    targets=None,
 ) -> LookProfile:
     """LEARN: reference frames -> fitted Look Profile (spec §4 Learn mode).
 
-    Loads the pool, computes robust pooled statistics, runs the staged fit against the
-    neutral prior, and wraps the result as a savable profile.
+    Loads the pool, computes robust pooled statistics (or reuses precomputed ``targets``
+    from :func:`pool_targets` — the caching seam), runs the staged fit against the neutral
+    prior, and wraps the result as a savable profile.
     """
-    images = load_references(ref_paths, max_dim=max_dim)
-    targets = pool_stats([compute_frame_stats(img) for img in images])
+    if targets is None:
+        targets = pool_targets(ref_paths, max_dim=max_dim)
     result = fit_film_model(targets, options=options, progress=progress)
     return LookProfile.from_fit_result(result, name=name)
 

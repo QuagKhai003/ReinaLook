@@ -141,10 +141,19 @@ class ApplyTab(QtWidgets.QWidget):
         preview.addWidget(self._before_lbl, 1)
         preview.addWidget(QtWidgets.QLabel("After (profile applied)"))
         preview.addWidget(self._after_lbl, 1)
+        pw = QtWidgets.QWidget()
+        pw.setLayout(preview)
 
+        # controls | preview in a draggable splitter (spec §9 resizable split)
+        scroll.setMaximumWidth(16777215)               # splitter governs the width now
+        self._splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self._splitter.addWidget(scroll)
+        self._splitter.addWidget(pw)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setSizes([370, 700])
         root = QtWidgets.QHBoxLayout(self)
-        root.addWidget(scroll)
-        root.addLayout(preview, 1)
+        root.addWidget(self._splitter)
 
     # — profile loading + recents —
     def _browse_profile(self, _=None) -> None:
@@ -215,7 +224,10 @@ class ApplyTab(QtWidgets.QWidget):
 
     def _reload_recents(self) -> None:
         self._recents.clear()
-        self._recents.addItems(self._read_recents())
+        for p in self._read_recents():
+            self._recents.addItem(p)
+            self._recents.setItemData(self._recents.count() - 1, p,
+                                      QtCore.Qt.ItemDataRole.ToolTipRole)
 
     # — preview (cached endpoints + instant lerp) —
     def _placement_key(self) -> str:
