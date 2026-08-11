@@ -95,6 +95,8 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="node2: replace Node 2; between: DWG/DI look between Node 1&2")
     ap.add_argument("--out", "-o", required=True, help="output .cube path")
     ap.add_argument("--title", default=None, help="cube TITLE (default: profile name)")
+    ap.add_argument("--force", action="store_true",
+                    help="export even if stress validation fails (not recommended)")
     return parser
 
 
@@ -184,15 +186,37 @@ def _cmd_learn(args: argparse.Namespace) -> int:
 
 
 def _cmd_apply(args: argparse.Namespace) -> int:
-    from lutgen.orchestration.learn import render_cube_from_profile
+    from lutgen.orchestration.learn import (
+        diagnose_model,
+        render_cube_from_profile,
+        validate_baked_cube,
+    )
     from lutgen.orchestration.profile import load_profile
 
     profile = load_profile(args.profile)
     cube = render_cube_from_profile(profile, args.strength,
                                     title=args.title or profile.name, placement=args.placement)
+
+    report = validate_baked_cube(cube, args.placement)   # spec §6: mandatory before export
+    if not report.ok:
+        print("stress validation FAILED:", file=sys.stderr)
+        blamed = diagnose_model(profile.model, args.strength, placement=args.placement)
+        for block, problems in blamed.items():
+            for p in problems:
+                print(f"  {block}: {p}", file=sys.stderr)
+        for v in report.violations:                       # anything not attributable to a block
+            if not any(str(v) in ps for ps in blamed.values()):
+                print(f"  (unattributed): {v}", file=sys.stderr)
+        if not args.force:
+            print("not exported. Re-learn with more/varied frames, or --force to override.",
+                  file=sys.stderr)
+            return 3
+        print("exporting anyway (--force).", file=sys.stderr)
+
     write_cube(args.out, cube.samples, cube.size, title=cube.title)
     where = "between Node 1&2" if args.placement == "between" else "replace Node 2"
-    print(f"wrote {args.out}  ({where}, profile '{profile.name}', strength {args.strength})")
+    print(f"wrote {args.out}  ({where}, profile '{profile.name}', strength {args.strength}, "
+          f"validation {'OK' if report.ok else 'FORCED'})")
     return 0
 
 
