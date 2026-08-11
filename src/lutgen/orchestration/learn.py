@@ -4,7 +4,8 @@
           frames once, then APPLY any saved profile to bake a .cube. This module wires
           ingest -> poolstats -> fit (learn) and profile -> FilmModel -> grid bake (apply).
 @done     learn_profile(ref_paths) -> LookProfile; render_cube_from_profile(profile) -> Cube;
-          frame_count_hint (the single-image wall, surfaced per spec §4).
+          frame_count_hint (the single-image wall, surfaced per spec §4); validate_baked_cube
+          + diagnose_model (§6 stress gate with per-block attribution — the CLI export gate).
 @todo     Source-adaptive white-balance trim in Apply (Phase 4).
 @limits   L3: file IO via ingest only. Bake: the model is natively DWG/DI -> DWG/DI, so
           "between" is a direct forward pass and "node2" composes the base AFTER the model.
@@ -24,6 +25,7 @@ from lutgen.engine.cube_io import Cube
 from lutgen.engine.grid import identity_grid
 from lutgen.engine.regularize import regularize
 from lutgen.engine.strength import blend
+from lutgen.engine.validate import ValidationReport, validate_cube
 from lutgen.fitter.filmmodel import FilmModel
 from lutgen.fitter.fit import FitOptions, ProgressFn, fit_film_model
 
@@ -91,3 +93,49 @@ def render_cube_from_profile(
     else:
         raise ValueError(f"unknown placement {placement!r} (expected 'node2' or 'between')")
     return Cube(size=size, samples=final, title=title)
+
+
+# ── §6 stress-validation gate (mandatory before export) ──────────────
+
+def _reference_for(placement: str, size: int) -> np.ndarray:
+    return identity_grid(size) if placement == "between" else load_base(size)
+
+
+def validate_baked_cube(cube: Cube, placement: str = "node2") -> ValidationReport:
+    """Run the spec §6 stress checks on a baked cube (tone reversals, ΔE smoothness,
+    hue-wheel continuity, endpoints) against the placement's reference conversion."""
+    ref = _reference_for(placement, cube.size)
+    return validate_cube(
+        cube.samples, cube.size, ref,
+        interp=lambda x: apply_cube(x, cube.samples, cube.size),
+        reference_interp=lambda x: apply_cube(x, ref, cube.size),
+    )
+
+
+_BLOCK_STACKS = (
+    ("crosstalk", lambda m: FilmModel(crosstalk=m.crosstalk)),
+    ("tone curves", lambda m: FilmModel(crosstalk=m.crosstalk, curves=m.curves)),
+    ("sat-vs-luma", lambda m: FilmModel(crosstalk=m.crosstalk, curves=m.curves,
+                                        sat_luma=m.sat_luma)),
+    ("hue zones", lambda m: FilmModel(crosstalk=m.crosstalk, curves=m.curves,
+                                      sat_luma=m.sat_luma, hue_zones=m.hue_zones)),
+)
+
+
+def diagnose_model(model: FilmModel, strength: float = 1.0, *,
+                   placement: str = "node2", size: int = DEFAULT_SIZE) -> dict[str, list[str]]:
+    """Attribute §6 violations to the model block that introduces them.
+
+    Bakes the model with blocks enabled progressively (A -> A+B -> A+B+C -> full); a check
+    that first fails when block X joins is X's fault. Returns {block name: [violations]} —
+    empty dict = clean."""
+    blamed: dict[str, list[str]] = {}
+    seen: set[str] = set()
+    for name, stack in _BLOCK_STACKS:
+        cube = render_cube_from_profile(stack(model), strength, placement=placement, size=size)
+        report = validate_baked_cube(cube, placement)
+        fresh = [str(v) for v in report.violations if str(v) not in seen]
+        if fresh:
+            blamed[name] = fresh
+            seen.update(fresh)
+    return blamed

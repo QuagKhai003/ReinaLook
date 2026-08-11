@@ -9,8 +9,13 @@
           Block E hue x luma grid (v2.1, Phase 3).
 @limits   PURE: no IO, no network, no AI. Vectorized over (...,3) float64. All-neutral params ->
           input returned BIT-FOR-BIT (identity@0), preserving the sacred strength=0 base. The
-          DI->Oklab round-trip runs only when C or D is active, so an A/B-only model adds no
-          conversion error.
+          Oklab round-trip runs only when C or D is active, so an A/B-only model adds no
+          conversion error. C/D run in CODE-SPACE Oklab — Oklab computed on the DI code values
+          directly (bounded L in [0,1], chroma <= ~0.32, DI's log encoding is already
+          near-perceptual). Scene-referred Oklab (via DI decode) explodes at the lattice
+          corners (DI 1.0 = linear ~100 -> L >> 1) and made C/D produce tone reversals and
+          delta-E spikes there (found by the b1.7 stress harness); the fit absorbs the
+          space difference end-to-end.
 @affects  Built from crosstalk.py + scurve.py + satluma.py + huezone.py + engine/perceptual.py.
           Consumed by fitter/fit.py (1.4) + pipeline (1.6). See ADR-0001, spec §3.
 """
@@ -21,7 +26,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from lutgen.engine.perceptual import di_to_oklab, oklab_to_di
+from lutgen.engine.perceptual import from_oklab, to_oklab
 
 from .crosstalk import CrosstalkParams, apply_crosstalk
 from .huezone import HueZoneParams, apply_hue_zones
@@ -36,7 +41,7 @@ def _identity_curves() -> tuple[SCurveParams, SCurveParams, SCurveParams]:
 @dataclass
 class FilmModel:
     """The parametric film transform: A crosstalk -> B per-channel S-curves -> C sat-vs-luma
-    -> D hue-zone trims. C and D run in Oklab via one shared DI round-trip.
+    -> D hue-zone trims. C and D run in code-space Oklab via one shared round-trip.
 
     ``curves`` is the (R, G, B) tuple of tone curves — independent per channel, which is what
     lets fitted film shadows drift toward a colour. Default construction is the identity.
@@ -72,8 +77,8 @@ class FilmModel:
         x = apply_crosstalk(rgb, self.crosstalk)          # Block A
         x = apply_scurve(x, self.curves)                  # Block B
         if not (self.sat_luma.is_identity() and self.hue_zones.is_identity()):
-            lab = di_to_oklab(x)
+            lab = to_oklab(x)                             # code-space Oklab (bounded, sane)
             lab = apply_sat_luma(lab, self.sat_luma)      # Block C
             lab = apply_hue_zones(lab, self.hue_zones)    # Block D
-            x = oklab_to_di(lab)
+            x = from_oklab(lab)
         return x
