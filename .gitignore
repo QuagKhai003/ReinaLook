@@ -8,6 +8,13 @@
 /LUT/
 /CLAUDE.md
 /WORKFLOW.md
+/.claude/
+*.plan.md
+*.notes.md
+/.notes/
+
+# tests are local-only (chosen at init 2026-08-11)
+/tests/
 
 # ── Python ───────────────────────────────────────────────────────────
 __pycache__/
