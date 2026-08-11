@@ -3,10 +3,11 @@
 @context  Wires widgets to the tested fitters: references OR before/after pairs, fitter/method/
           space/tone/strength controls, before/after preview, export, save preset. No color math
           here (Plan §3, ADR-0007/0014).
-@done     MainWindow: Learn (v2) + Apply (v2) + Foundation (legacy) tabs; before/after pairs
+@done     MainWindow: Learn / Apply / Match (legacy) mode tabs — self-contained pages, window
+          title follows the mode, last mode restored via QSettings; before/after pairs
           foundation; tone + strength sliders; live preview; export. Shared helpers via
           app/worker.py + app/qt_image.py.
-@todo     Recipe editor (ADR-0002 b2.3); mode restructure polish (b2.4). Thumbnails, drag-drop.
+@todo     Perf/layout QA (ADR-0002 b2.5). Thumbnails, drag-drop.
 @limits   Imports PySide6 (only when the GUI runs). Look refit on any look control; re-blend on strength.
 @affects  Uses fitters (mid/rich/pairs), engine.base/strength/regularize, app.preview, preset.
           Launched by app/run.py. See ADR-0007/0014.
@@ -177,18 +178,31 @@ class MainWindow(QtWidgets.QMainWindow):
         root.addLayout(preview, 1)
         self._central = QtWidgets.QWidget(); self._central.setLayout(root)
 
-        # top-level modes (ADR-0002): Learn + Apply (v2 profile workflow) + the legacy
-        # foundation page. Full mode restructure/polish in b2.4.
+        # top-level modes (ADR-0002 b2.4): Learn / Apply (the v2 profile workflow) and the
+        # v1 before/after page as "Match (legacy)". Each tab is self-contained — no controls
+        # bleed across modes; the window title follows the active mode; the last-used mode
+        # is restored between sessions.
         from .apply_tab import ApplyTab
         from .learn_tab import LearnTab
 
         self._learn_tab = LearnTab()
         self._apply_tab = ApplyTab()
         self._tabs = QtWidgets.QTabWidget()
-        self._tabs.addTab(self._learn_tab, "Learn (v2)")
-        self._tabs.addTab(self._apply_tab, "Apply (v2)")
-        self._tabs.addTab(self._central, "Foundation (legacy)")
+        self._tabs.addTab(self._learn_tab, "Learn")
+        self._tabs.addTab(self._apply_tab, "Apply")
+        self._tabs.addTab(self._central, "Match (legacy)")
+        self._tabs.currentChanged.connect(self._on_mode_changed)
         self.setCentralWidget(self._tabs)
+
+        settings = QtCore.QSettings("ReinaLook", "ReinaLook")
+        last = int(settings.value("last_mode", 0))
+        self._tabs.setCurrentIndex(last if 0 <= last < self._tabs.count() else 0)
+        self._on_mode_changed(self._tabs.currentIndex())
+
+    def _on_mode_changed(self, index: int) -> None:
+        """Window title follows the mode; the choice persists across sessions."""
+        self.setWindowTitle(f"ReinaLook — {self._tabs.tabText(index)}")
+        QtCore.QSettings("ReinaLook", "ReinaLook").setValue("last_mode", index)
 
     def _slider(self, value, slot):
         s = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
