@@ -4,7 +4,8 @@
           (spec §2.4). Six zones (R, Y, G, C, B, M) each carry a hue shift + a saturation trim;
           values between zone centres are interpolated smoothly around the hue wheel, so there
           are never hard zone boundaries (no hue breaks — spec §6 checks this).
-@done     HueZoneParams (6 x {shift, trim}) + apply_hue_zones on Oklab (...,3) arrays.
+@done     HueZoneParams (6 x {shift, trim}) + apply_hue_zones on Oklab (...,3) arrays; public
+          ZONE_NAMES/ZONE_ANGLES (consumed by orchestration/poolstats.py zone binning).
 @todo     v2.1 replaces the 6 zones with a low-order Fourier hue curve (spec §3, Phase 3).
 @limits   PURE: no IO. Operates on Oklab; rotates hue / scales chroma — L untouched. Neutral
           (all 0) returns input BIT-FOR-BIT. Interpolation is smoothstep-eased between adjacent
@@ -42,7 +43,7 @@ def _zone_angles() -> tuple[tuple[str, ...], np.ndarray]:
     return names, angles[order]
 
 
-_ZONE_NAMES, _ZONE_ANGLES = _zone_angles()
+ZONE_NAMES, ZONE_ANGLES = _zone_angles()
 _TWO_PI = 2.0 * np.pi
 
 
@@ -70,7 +71,7 @@ class HueZoneParams:
 
     def _by_zone(self, kind: str) -> np.ndarray:
         d = asdict(self)
-        return np.array([d[f"{n}_{kind}"] for n in _ZONE_NAMES], dtype=np.float64)
+        return np.array([d[f"{n}_{kind}"] for n in ZONE_NAMES], dtype=np.float64)
 
 
 def _interp_periodic(hue: np.ndarray, zone_values: np.ndarray) -> np.ndarray:
@@ -80,8 +81,8 @@ def _interp_periodic(hue: np.ndarray, zone_values: np.ndarray) -> np.ndarray:
     every centre — each zone plateaus at its own value and there is no seam at the wrap.
     """
     # position of each hue within [centre_i, centre_i+1), walking the wheel from the first centre
-    rel = (hue - _ZONE_ANGLES[0]) % _TWO_PI
-    edges = (_ZONE_ANGLES - _ZONE_ANGLES[0]) % _TWO_PI          # ascending, edges[0] = 0
+    rel = (hue - ZONE_ANGLES[0]) % _TWO_PI
+    edges = (ZONE_ANGLES - ZONE_ANGLES[0]) % _TWO_PI          # ascending, edges[0] = 0
     idx = np.searchsorted(edges, rel, side="right") - 1          # zone to the left
     nxt = (idx + 1) % len(edges)
     span = (edges[nxt] - edges[idx]) % _TWO_PI
