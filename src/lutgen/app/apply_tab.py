@@ -5,9 +5,10 @@
           slider (cached endpoint images, lerp per tick), pick placement, and export through
           the §6 stress gate — a failing profile shows the offending block and needs an
           explicit "Export anyway".
-@done     ApplyTab: load + recents (QSettings), recipe summary, threaded endpoint bake
-          (placement/still changes debounced), instant strength lerp, gated export.
-@todo     Recipe EDITING is 2.3; source-adaptive trim is Phase 4.
+@done     ApplyTab: load + recents (QSettings), EDITABLE recipe (RecipeEditor — edits re-bake
+          the preview debounced, mark modified, save-as), threaded endpoint bake, instant
+          strength lerp, gated export.
+@todo     Source-adaptive trim is Phase 4.
 @limits   GUI-only (Qt); no color math — bake/validate via orchestration/learn.py. The
           strength lerp is exact for "between" and a close approximation under node2's gamut
           clamp; EXPORT always bakes the exact cube at the chosen strength.
@@ -28,11 +29,11 @@ from lutgen.orchestration.learn import (
     render_cube_from_profile,
     validate_baked_cube,
 )
-from lutgen.orchestration.profile import LookProfile, load_profile
+from lutgen.orchestration.profile import LookProfile, load_profile, save_profile
 
 from .preview import load_preview_still, make_test_still
 from .qt_image import to_pixmap
-from .recipe import recipe_summary
+from .recipe_editor import RecipeEditor
 from .worker import ComputeThread
 
 _IMG_FILTER = "Images (*.png *.jpg *.jpeg *.tif *.tiff)"
@@ -48,6 +49,7 @@ class ApplyTab(QtWidgets.QWidget):
         super().__init__()
         self._profile: LookProfile | None = None
         self._profile_path: str | None = None
+        self._modified = False
         self._base = load_base()
         self._still = make_test_still()
         self._before_img = apply_cube(self._still, self._base)
@@ -75,9 +77,14 @@ class ApplyTab(QtWidgets.QWidget):
         self._info = QtWidgets.QLabel("No profile loaded.")
         self._info.setWordWrap(True)
 
-        self._summary = QtWidgets.QPlainTextEdit()
-        self._summary.setReadOnly(True)
-        self._summary.setPlaceholderText("Load a Look Profile to see its recipe.")
+        # the editable recipe (b2.3) — edits re-bake the preview debounced + enable save-as
+        self._editor = RecipeEditor()
+        self._editor.setEnabled(False)
+        self._editor.edited.connect(self._on_edited)
+
+        self._saveas_btn = QtWidgets.QPushButton("Save edited profile as…")
+        self._saveas_btn.setEnabled(False)
+        self._saveas_btn.clicked.connect(self._save_as)
 
         self._placement = QtWidgets.QComboBox()
         self._placement.addItems(["Replace CSTout", "Between CSTs"])
@@ -108,13 +115,14 @@ class ApplyTab(QtWidgets.QWidget):
         controls.addWidget(QtWidgets.QLabel("Recent profiles"))
         controls.addWidget(self._recents)
         controls.addWidget(self._info)
-        controls.addWidget(QtWidgets.QLabel("Recipe"))
-        controls.addWidget(self._summary, 1)
+        controls.addWidget(QtWidgets.QLabel("Recipe (editable)"))
+        controls.addWidget(self._editor, 1)
         form = QtWidgets.QFormLayout()
         form.addRow("Placement", self._placement)
         controls.addLayout(form)
         controls.addWidget(self._strength_lbl)
         controls.addWidget(self._strength)
+        controls.addWidget(self._saveas_btn)
         controls.addWidget(self._export_btn)
 
         cw = QtWidgets.QWidget()
@@ -158,11 +166,40 @@ class ApplyTab(QtWidgets.QWidget):
             return
         self._profile = profile
         self._profile_path = path
+        self._modified = False
         self._info.setText(f"<b>{profile.name}</b> — learned from {profile.n_frames} frames")
-        self._summary.setPlainText(recipe_summary(profile))
+        self._editor.set_model(profile.model)
+        self._editor.setEnabled(True)
+        self._saveas_btn.setEnabled(False)
         self._export_btn.setEnabled(True)
         self._push_recent(path)
         self._bake_endpoints()
+
+    # — recipe editing (b2.3) —
+    def _on_edited(self) -> None:
+        if self._profile is None:
+            return
+        self._profile.model = self._editor.model()
+        self._modified = True
+        self._saveas_btn.setEnabled(True)
+        self._info.setText(f"<b>{self._profile.name}</b> — learned from "
+                           f"{self._profile.n_frames} frames <i>(modified)</i>")
+        self._bake_timer.start()                       # debounced preview re-bake
+
+    def _save_as(self, _=None) -> None:
+        if self._profile is None:
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Look Profile", f"{self._profile.name}-edited.json",
+            "Look Profile (*.json)")
+        if path:
+            from pathlib import Path
+            self._profile.name = Path(path).stem
+            save_profile(path, self._profile)
+            self._modified = False
+            self._info.setText(f"<b>{self._profile.name}</b> — learned from "
+                               f"{self._profile.n_frames} frames")
+            self._push_recent(path)
 
     def _push_recent(self, path: str) -> None:
         recents = [p for p in self._read_recents() if p != path]
