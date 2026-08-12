@@ -93,7 +93,9 @@ class LearnTab(QtWidgets.QWidget):
         self._save_btn.clicked.connect(self._save)
 
         lay = QtWidgets.QVBoxLayout(self)
-        lay.addWidget(QtWidgets.QLabel("GRADED reference frames (varied scenes, same look)"))
+        lay.addWidget(QtWidgets.QLabel("GRADED reference frames — varied scenes, SAME "
+                                       "lighting mood (mixing day + night frames blends "
+                                       "two looks into neither)"))
         lay.addWidget(self._list, 1)
         lay.addWidget(add_btn)
         lay.addWidget(rm_btn)
