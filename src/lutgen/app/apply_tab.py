@@ -40,7 +40,7 @@ from .qt_image import to_pixmap
 from .recipe_editor import RecipeEditor
 from .worker import ComputeThread
 
-_IMG_FILTER = "Images (*.png *.jpg *.jpeg *.tif *.tiff)"
+_IMG_FILTER = ("Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);; All files (*)")
 _PREVIEW_W = 520
 _MAX_RECENTS = 8
 _MAX_STILLS = 20
