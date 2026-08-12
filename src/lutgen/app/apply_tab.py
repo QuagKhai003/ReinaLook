@@ -8,8 +8,9 @@
 @done     ApplyTab: load + recents (QSettings), EDITABLE recipe (RecipeEditor — edits re-bake
           the preview debounced, mark modified, save-as), MULTI-STILL preview (up to 20 DWG
           stills, prev/next + index slider, per-still endpoint cache — revisits instant,
-          look/placement changes invalidate), threaded endpoint bake, instant strength lerp,
-          gated export.
+          look/placement changes invalidate), TONE/COLOR AMOUNT dials (ADR-0005 — scale the
+          recipe toward neutral per group; bake + export use the scaled model, save-as stays
+          unscaled), threaded endpoint bake, instant strength lerp, gated export.
 @todo     Source-adaptive trim (spec Phase 4).
 @limits   GUI-only (Qt); no color math — bake/validate via orchestration/learn.py. The
           strength lerp is exact for "between" and a close approximation under node2's gamut
@@ -26,6 +27,7 @@ from PySide6 import QtCore, QtWidgets
 from lutgen.engine.apply import apply_cube
 from lutgen.engine.base import DEFAULT_SIZE, load_base
 from lutgen.engine.cube_io import write_cube
+from lutgen.fitter.filmmodel.scale import scaled_model
 from lutgen.orchestration.learn import (
     diagnose_model,
     render_cube_from_profile,
@@ -38,7 +40,7 @@ from .qt_image import to_pixmap
 from .recipe_editor import RecipeEditor
 from .worker import ComputeThread
 
-_IMG_FILTER = "Images (*.png *.jpg *.jpeg *.tif *.tiff)"
+_IMG_FILTER = ("Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);; All files (*)")
 _PREVIEW_W = 520
 _MAX_RECENTS = 8
 _MAX_STILLS = 20
@@ -107,6 +109,20 @@ class ApplyTab(QtWidgets.QWidget):
         self._strength.valueChanged.connect(self._on_strength)
         self._strength_lbl = QtWidgets.QLabel("Strength: 1.00")
 
+        # ADR-0005: scale the RECIPE toward neutral, per group — keep the film's palette
+        # while relaxing its tonal mood (or vice versa). Re-bakes debounced; export uses
+        # the scaled model. Save-as always saves the editor's model UNscaled.
+        self._tone_amt = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._tone_amt.setRange(0, 100)
+        self._tone_amt.setValue(100)
+        self._tone_amt.valueChanged.connect(self._on_amounts)
+        self._tone_amt_lbl = QtWidgets.QLabel("Tone amount: 100%  (exposure + contrast)")
+        self._color_amt = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._color_amt.setRange(0, 100)
+        self._color_amt.setValue(100)
+        self._color_amt.valueChanged.connect(self._on_amounts)
+        self._color_amt_lbl = QtWidgets.QLabel("Color amount: 100%  (palette + hue/sat)")
+
         still_btn = QtWidgets.QPushButton("Load preview stills (DWG/DI frames, up to 20)…")
         still_btn.clicked.connect(self._load_stills)
 
@@ -148,6 +164,10 @@ class ApplyTab(QtWidgets.QWidget):
         form = QtWidgets.QFormLayout()
         form.addRow("Placement", self._placement)
         controls.addLayout(form)
+        controls.addWidget(self._tone_amt_lbl)
+        controls.addWidget(self._tone_amt)
+        controls.addWidget(self._color_amt_lbl)
+        controls.addWidget(self._color_amt)
         controls.addWidget(self._strength_lbl)
         controls.addWidget(self._strength)
         controls.addWidget(self._saveas_btn)
@@ -264,6 +284,21 @@ class ApplyTab(QtWidgets.QWidget):
     def _placement_key(self) -> str:
         return "between" if self._placement.currentIndex() == 1 else "node2"
 
+    def _effective_model(self):
+        """The editor's model scaled by the Tone/Color amount dials (bake + export path)."""
+        return scaled_model(self._profile.model,
+                            self._tone_amt.value() / 100.0,
+                            self._color_amt.value() / 100.0)
+
+    def _on_amounts(self, _=None) -> None:
+        self._tone_amt_lbl.setText(
+            f"Tone amount: {self._tone_amt.value()}%  (exposure + contrast)")
+        self._color_amt_lbl.setText(
+            f"Color amount: {self._color_amt.value()}%  (palette + hue/sat)")
+        if self._profile is not None:
+            self._invalidate_after_cache()             # scaled look: endpoints stale
+            self._bake_timer.start()
+
     def _before_img_at(self, idx: int) -> np.ndarray:
         if idx not in self._before_cache:              # base never changes: cache per still
             self._before_cache[idx] = apply_cube(self._stills[idx], self._base)
@@ -308,7 +343,7 @@ class ApplyTab(QtWidgets.QWidget):
         if self._thread is not None and self._thread.isRunning():
             self._bake_timer.start()                   # busy — try again shortly
             return
-        model = self._profile.model
+        model = self._effective_model()
         placement = self._placement_key()
         idx = self._still_idx
         still = self._stills[idx]
@@ -392,11 +427,11 @@ class ApplyTab(QtWidgets.QWidget):
         if self._profile is None:
             return
         placement = self._placement_key()
-        cube = render_cube_from_profile(self._profile, self._strength_value(),
+        cube = render_cube_from_profile(self._effective_model(), self._strength_value(),
                                         title=self._profile.name, placement=placement)
         report = validate_baked_cube(cube, placement)   # §6: mandatory before export
         if not report.ok:
-            blamed = diagnose_model(self._profile.model, self._strength_value(),
+            blamed = diagnose_model(self._effective_model(), self._strength_value(),
                                     placement=placement)
             lines = [f"{block}: {v}" for block, vs in blamed.items() for v in vs]
             unattributed = [str(v) for v in report.violations

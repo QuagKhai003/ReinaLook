@@ -6,7 +6,8 @@
           statistics the staged fit (batch 1.4) targets, pools them with per-bin MEDIANS (one
           unusually colourful frame cannot hijack the fit), and provides the documented
           neutral prior the fit relaxes toward where data is thin.
-@done     FrameStats + compute_frame_stats; PooledTargets + pool_stats (median per bin);
+@done     FrameStats + compute_frame_stats (incl. band_mean_ab — per-band conditional
+          balance, ADR-0006); PooledTargets + pool_stats (median per bin);
           neutral_prior() with canonical ungraded-world values.
 @todo     Optional outlier frame down-weighting (spec §4 "frame weighting") if median pooling
           proves insufficient on real pools — evaluate during 1.4.
@@ -47,6 +48,8 @@ class FrameStats:
     channel_quantiles: np.ndarray   # (3, len(QUANTILES)) per-RGB-channel tone distribution
     mean_lab: np.ndarray            # (3,) Oklab mean (colour balance)
     chroma_by_band: np.ndarray      # (N_BANDS,) mean chroma per L band
+    band_mean_ab: np.ndarray        # (N_BANDS, 2) mean Oklab a/b per L band — the CONDITIONAL
+                                    # balance ("shadows cool, highlights warm"), ADR-0006
     band_weight: np.ndarray         # (N_BANDS,) pixel share per L band (sums to 1)
     zone_mean_ab: np.ndarray        # (N_ZONES, 2) mean (a,b) per hue zone (chromatic px only)
     zone_weight: np.ndarray         # (N_ZONES,) chromatic-pixel share per zone (sums to <= 1)
@@ -66,6 +69,7 @@ class PooledTargets:
     channel_quantiles: np.ndarray
     mean_lab: np.ndarray
     chroma_by_band: np.ndarray
+    band_mean_ab: np.ndarray
     band_weight: np.ndarray
     zone_mean_ab: np.ndarray
     zone_weight: np.ndarray
@@ -97,12 +101,14 @@ def compute_frame_stats(image: np.ndarray) -> FrameStats:
 
     band_idx = np.digitize(luma, L_BAND_EDGES)
     chroma_by_band = np.zeros(N_BANDS)
+    band_mean_ab = np.zeros((N_BANDS, 2))
     band_weight = np.zeros(N_BANDS)
     for b in range(N_BANDS):
         m = band_idx == b
         band_weight[b] = m.sum() / n
         if m.any():
             chroma_by_band[b] = chroma[m].mean()
+            band_mean_ab[b] = lab[m, 1:].mean(axis=0)
 
     chromatic = chroma >= CHROMA_FLOOR
     zone_mean_ab = np.zeros((N_ZONES, 2))
@@ -121,6 +127,7 @@ def compute_frame_stats(image: np.ndarray) -> FrameStats:
         channel_quantiles=channel_quantiles,
         mean_lab=lab.mean(axis=0),
         chroma_by_band=chroma_by_band,
+        band_mean_ab=band_mean_ab,
         band_weight=band_weight,
         zone_mean_ab=zone_mean_ab,
         zone_weight=zone_weight,
@@ -144,6 +151,7 @@ def pool_stats(frames: list[FrameStats]) -> PooledTargets:
         channel_quantiles=med("channel_quantiles"),
         mean_lab=med("mean_lab"),
         chroma_by_band=med("chroma_by_band"),
+        band_mean_ab=med("band_mean_ab"),
         band_weight=mean("band_weight"),
         zone_mean_ab=med("zone_mean_ab"),
         zone_weight=mean("zone_weight"),
@@ -171,6 +179,7 @@ def neutral_prior() -> PooledTargets:
         channel_quantiles=np.tile(ramp, (3, 1)),
         mean_lab=np.array([0.45, 0.0, 0.0]),
         chroma_by_band=np.array([0.03, 0.05, 0.06, 0.05, 0.035]),
+        band_mean_ab=np.zeros((N_BANDS, 2)),   # gray world at every brightness
         band_weight=np.full(N_BANDS, 1.0 / N_BANDS),
         zone_mean_ab=0.06 * zone_dirs,
         zone_weight=np.full(N_ZONES, 1.0 / N_ZONES),
