@@ -69,7 +69,11 @@ def _fmt_zones(hz) -> list[str]:
 def recipe_summary(profile: LookProfile) -> str:
     """The learned recipe as readable grouped text (near-neutral entries omitted)."""
     m = profile.model
-    lines = ["Tone curves"]
+    lines = []
+    if abs(m.global_trim.exposure) > _EPS:
+        lines.append(f"Global\n  exposure {m.global_trim.exposure:+.3f} DI "
+                     f"(≈ {m.global_trim.exposure / 0.07:+.1f} stops)")
+    lines.append("Tone curves")
     lines += _fmt_curves(m.curves)
     lines.append("Crosstalk")
     lines += _fmt_crosstalk(m.crosstalk)
