@@ -84,12 +84,14 @@ class FitOptions:
     diff_step: float = 0.02           # finite-difference secant step: statistics of a
                                       # finite sample cloud carry O(1/n) quantization;
                                       # a wide secant averages over it (ADR-0007)
-    exposure_align: bool = False      # prior path only. OFF (default): the full look — incl.
-                                      # its tonal mood — is learned against the spec's normal
-                                      # world; Block G's exposure param makes the level
-                                      # expressible (the ADR-0003 bound-slam is gone). ON:
-                                      # colour-science-only recipe (source adopts the pool's
-                                      # tone distribution) — kept as a future product knob.
+    exposure_align: bool = True       # prior path only. ON (default): the source world adopts
+                                      # the pool's tone distribution, so curves learn the tone
+                                      # SHAPE valid at the footage's own level — coherent with
+                                      # the ship-without-brightness default (fitting curves
+                                      # around a learned exposure and then stripping it left
+                                      # them in the wrong domain: dark mids + lifted shadows,
+                                      # the user's "wash"). OFF: full-mood fit for users who
+                                      # bake film brightness.
 
 
 @dataclass
