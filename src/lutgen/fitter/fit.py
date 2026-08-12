@@ -185,11 +185,12 @@ _CT_LO, _CT_HI = np.full(6, -0.25), np.full(6, 0.25)
 # Spectral decay: order-k coefficients are bounded by base/k, keeping the curve's DERIVATIVE
 # bounded (a steep hue curve compresses hues into delta-E spikes and tone reversals).
 _HARM = np.array([1.0, 1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0])   # k per coef (a0, a1..a4, b1..b4)
-_CD_NEUTRAL = np.array([1.0, 1.0, 1.0] + [0.0] * 18)
+_HARM_L = np.array([1.0, 1.0, 2.0, 1.0, 2.0])                     # Block E: l0, lc1, lc2, ls1, ls2
+_CD_NEUTRAL = np.array([1.0, 1.0, 1.0] + [0.0] * 23)
 # sat-vs-luma bounded to the physically-plausible film range: multipliers near 2x create
 # chroma gradients steep enough to reverse channels on saturated ramps (found by the gate)
-_CD_LO = np.concatenate([[0.4, 0.4, 0.4], -0.12 / _HARM, -0.25 / _HARM])
-_CD_HI = np.concatenate([[1.7, 1.7, 1.7], 0.12 / _HARM, 0.25 / _HARM])
+_CD_LO = np.concatenate([[0.4, 0.4, 0.4], -0.12 / _HARM, -0.25 / _HARM, -0.2 / _HARM_L])
+_CD_HI = np.concatenate([[1.7, 1.7, 1.7], 0.12 / _HARM, 0.25 / _HARM, 0.2 / _HARM_L])
 
 
 def _tone_from_vec(v: np.ndarray) -> tuple[GlobalParams, tuple[SCurveParams, SCurveParams, SCurveParams]]:
@@ -250,6 +251,15 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
         d_mag = (mag_s - mag_r) / np.maximum(mag_r, 0.02)
         parts.append(opt.zone_weight * c * d_ang)
         parts.append(opt.zone_weight * c * d_mag)
+        # Block E signal: the same comparison per dark/bright half (half weight each)
+        for h in (0, 1):
+            c2 = _conf(ref.hue2_weight[h], opt.w0)
+            m_r = np.hypot(ref.hue2_mean_ab[h, :, 0], ref.hue2_mean_ab[h, :, 1])
+            c2 = c2 * (m_r / (m_r + 0.01))
+            a_r = np.arctan2(ref.hue2_mean_ab[h, :, 1], ref.hue2_mean_ab[h, :, 0])
+            a_s = np.arctan2(s.hue2_mean_ab[h, :, 1], s.hue2_mean_ab[h, :, 0])
+            d2 = (a_s - a_r + np.pi) % (2.0 * np.pi) - np.pi
+            parts.append(opt.zone_weight * c2 * d2)
     return np.concatenate(parts)
 
 
@@ -266,6 +276,11 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
         src_targets = source                      # a real measured pool is never rescaled
     else:
         src_targets = neutral_prior()
+        # the assumed world adopts the POOL's hue-mass structure: constants of the hue curve
+        # (s0, l0 …) are invisible in marginal statistics under a uniform wheel — peaks are
+        # what make them identifiable. Safe now that no mass residual exists to fight the
+        # shift (that combination was tried and removed — see decisions/LOG).
+        src_targets.hue_weight = ref.hue_weight.copy()
         if opt.exposure_align:
             src_targets = _exposure_aligned(src_targets, ref)
 
@@ -318,7 +333,8 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     # higher harmonics ridge ~k^2 — a curvature penalty, the classic smoothness prior
     cd_ridge = np.concatenate([np.full(3, opt.ridge_huesat),
                                opt.ridge_huesat * _HARM ** 2,
-                               opt.ridge_huesat * 4.0 * _HARM ** 2])
+                               opt.ridge_huesat * 4.0 * _HARM ** 2,
+                               opt.ridge_huesat * 0.5 * _HARM_L ** 2])  # Block E
     cd_v = run_stage(
         "huesat", _CD_NEUTRAL, _CD_LO, _CD_HI, cd_ridge, _CD_NEUTRAL,
         lambda v: FilmModel(global_trim=global_trim, crosstalk=crosstalk, curves=curves,

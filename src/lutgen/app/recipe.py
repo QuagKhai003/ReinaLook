@@ -84,6 +84,12 @@ def _fmt_fourier(fh) -> list[str]:
         i, j = int(np.argmax(trim)), int(np.argmin(trim))
         rows.append(f"  sat: {trim[i]:+.0f}% @ {math.degrees(theta[i]):.0f}° · "
                     f"{trim[j]:+.0f}% @ {math.degrees(theta[j]):.0f}°")
+    from lutgen.fitter.filmmodel.fourierhue import eval_lshift
+    lmod = np.degrees(eval_lshift(theta, fh))
+    if np.abs(lmod).max() > 0.5:
+        i = int(np.argmax(np.abs(lmod)))
+        rows.append(f"  brightness-split: ±{abs(lmod[i]) / 2:.1f}° shadows↔highlights "
+                    f"@ {math.degrees(theta[i]):.0f}°")
     return rows or ["  neutral"]
 
 

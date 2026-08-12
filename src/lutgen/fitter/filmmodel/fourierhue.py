@@ -4,9 +4,12 @@
           plateaus (spec §3 v2.1: "the single most worthwhile upgrade"). Hue shift and sat
           trim are order-4 Fourier series over hue angle — 9 coefficients each, C-infinity
           smooth and periodic by construction: no zone boundaries exist to break at.
-@done     FourierHueParams (18 named coefficients) + apply_fourier_hue on Oklab (...,3);
-          eval_shift/eval_trim (used by the fit, the recipe summary and tests).
-@todo     Block E luma modulation (ADR-0007 b7.2) rides on this basis.
+          BLOCK E (b7.2): the hue shift gains a brightness-linear modulation
+          shift(θ, L) = F0(θ) + (L − 0.5)·F1(θ), F1 an order-2 series (5 coefs) — the
+          proper split-tone generalization ("blues go teal in the mids only", spec §2.4).
+@done     FourierHueParams (18 + 5 luma-mod coefficients) + apply_fourier_hue on Oklab;
+          eval_shift(hue, L)/eval_trim/eval_lshift (fit, recipe summary, tests).
+@todo     -
 @limits   PURE: no IO. Operates on Oklab; rotates hue / scales chroma — L untouched; the
           chroma multiplier clamps >= 0; achromatic pixels are fixed points. Neutral (all 0)
           returns the input BIT-FOR-BIT. Coefficient bounds live in the fit (±0.12 rad shift,
@@ -47,6 +50,12 @@ class FourierHueParams:
     ts2: float = 0.0
     ts3: float = 0.0
     ts4: float = 0.0
+    # Block E: brightness-linear hue-shift modulation F1(θ), order 2 (ADR-0007 b7.2)
+    l0: float = 0.0
+    lc1: float = 0.0
+    lc2: float = 0.0
+    ls1: float = 0.0
+    ls2: float = 0.0
 
     def is_identity(self) -> bool:
         return all(v == 0.0 for v in asdict(self).values())
@@ -63,11 +72,24 @@ def _series(hue: np.ndarray, c0: float, cos_c: np.ndarray, sin_c: np.ndarray) ->
     return out
 
 
-def eval_shift(hue: np.ndarray, p: FourierHueParams) -> np.ndarray:
-    """Hue shift (radians) at hue angle(s) ``hue``."""
-    return _series(np.asarray(hue, dtype=np.float64), p.s0,
+def eval_shift(hue: np.ndarray, p: FourierHueParams,
+               luma: np.ndarray | float = 0.5) -> np.ndarray:
+    """Hue shift (radians) at hue angle(s) — brightness-modulated (Block E):
+    shift(θ, L) = F0(θ) + (L − 0.5)·F1(θ). At L = 0.5 the modulation vanishes."""
+    hue = np.asarray(hue, dtype=np.float64)
+    base = _series(hue, p.s0,
                    np.array([p.sc1, p.sc2, p.sc3, p.sc4]),
                    np.array([p.ss1, p.ss2, p.ss3, p.ss4]))
+    return base + (np.asarray(luma, dtype=np.float64) - 0.5) * eval_lshift(hue, p)
+
+
+def eval_lshift(hue: np.ndarray, p: FourierHueParams) -> np.ndarray:
+    """F1(θ): the per-stop-of-brightness hue-shift modulation (radians per unit L)."""
+    hue = np.asarray(hue, dtype=np.float64)
+    out = np.full_like(hue, p.l0)
+    out += p.lc1 * np.cos(hue) + p.ls1 * np.sin(hue)
+    out += p.lc2 * np.cos(2 * hue) + p.ls2 * np.sin(2 * hue)
+    return out
 
 
 def eval_trim(hue: np.ndarray, p: FourierHueParams) -> np.ndarray:
@@ -89,7 +111,7 @@ def apply_fourier_hue(lab: np.ndarray, p: FourierHueParams) -> np.ndarray:
     a, b = lab[..., 1], lab[..., 2]
     hue = np.arctan2(b, a)
     chroma = np.hypot(a, b)
-    new_hue = hue + eval_shift(hue, p)
+    new_hue = hue + eval_shift(hue, p, lab[..., 0])     # Block E: L-modulated shift
     new_chroma = chroma * np.maximum(1.0 + eval_trim(hue, p), 0.0)
     out = lab.copy()
     out[..., 1] = new_chroma * np.cos(new_hue)

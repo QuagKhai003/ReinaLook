@@ -66,6 +66,8 @@ for _cf in ("s0", "sc1", "sc2", "sc3", "sc4", "ss1", "ss2", "ss3", "ss4"):
     _SPEC += [("Hue curve — shift coefs", ("hue_fourier", _cf), _cf, -0.12, 0.12, 0.005, _ID)]
 for _cf in ("t0", "tc1", "tc2", "tc3", "tc4", "ts1", "ts2", "ts3", "ts4"):
     _SPEC += [("Hue curve — sat coefs", ("hue_fourier", _cf), _cf, -0.25, 0.25, 0.005, _ID)]
+for _cf in ("l0", "lc1", "lc2", "ls1", "ls2"):
+    _SPEC += [("Hue curve — brightness mod", ("hue_fourier", _cf), _cf, -0.2, 0.2, 0.005, _ID)]
 
 
 def _get(d: dict, path: tuple[str, ...]) -> float:
