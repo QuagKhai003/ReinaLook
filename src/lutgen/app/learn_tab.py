@@ -201,7 +201,10 @@ class LearnTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not learn the look:\n{result}")
             return
         self._profile = result
-        self._summary.setPlainText(recipe_summary(result))
+        text = recipe_summary(result)
+        if result.grouping_note:
+            text = "NOTE: " + result.grouping_note + "\n\n" + text
+        self._summary.setPlainText(text)
         self._save_btn.setEnabled(True)
 
     # — save —

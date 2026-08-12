@@ -184,6 +184,8 @@ def _cmd_learn(args: argparse.Namespace) -> int:
         options=options,
         progress=lambda stage: print(f"fitting: {stage}"),
     )
+    if profile.grouping_note:
+        print(f"note: {profile.grouping_note}")
     save_profile(args.out, profile)
     cost = ", ".join(f"{k} {v:.4g}" for k, v in profile.stage_cost.items())
     print(f"wrote {args.out}  (learned from {profile.n_frames} frames; fit cost: {cost})")

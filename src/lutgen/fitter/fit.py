@@ -189,8 +189,7 @@ _HARM_L = np.array([1.0, 1.0, 2.0, 1.0, 2.0])                     # Block E: l0,
 _CD_NEUTRAL = np.array([1.0, 1.0, 1.0] + [0.0] * 23)
 # sat-vs-luma bounded to the physically-plausible film range: multipliers near 2x create
 # chroma gradients steep enough to reverse channels on saturated ramps (found by the gate)
-# sat-vs-luma is a gentle RELATIVE shape only (±30%): saturation level is never learned
-# (see _cd_from_vec) and web-still statistics cannot justify strong per-band swings either
+# sat-vs-luma is a gentle RELATIVE shape only (±30%); level is never learned
 _CD_LO = np.concatenate([[0.7, 0.7, 0.7], -0.12 / _HARM, -0.25 / _HARM, -0.2 / _HARM_L])
 _CD_HI = np.concatenate([[1.3, 1.3, 1.3], 0.12 / _HARM, 0.25 / _HARM, 0.2 / _HARM_L])
 
@@ -215,7 +214,7 @@ def _cd_from_vec(v: np.ndarray) -> tuple[SatLumaParams, FourierHueParams]:
     # is zeroed — hue-to-hue differences survive, the overall level stays the footage's own.
     sl = SatLumaParams(shadow=v[0], mid=v[1], high=v[2])
     coefs = dict(zip(FourierHueParams.field_names(), v[3:], strict=True))
-    coefs["t0"] = 0.0
+    coefs["t0"] = 0.0                                    # sat level is never learned
     fh = FourierHueParams(**coefs)
     return sl, fh
 
@@ -242,8 +241,9 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
                       (s.band_mean_ab - ref.band_mean_ab)).ravel())
     if chroma:
         # Saturation SHAPE only (ADR-0007): both sides normalized by their weighted mean —
-        # the LEVEL is never learned (web stills under-measure vividness; the level demand
-        # previously slammed parameters into bounds). Brightness-relative shape survives.
+        # the LEVEL is never learned (web stills under-measure vividness). An asymmetric
+        # level residual was trialled and REVERTED: it degraded the verified hue-luminance
+        # result (greens 1.145→0.98 vs ref 1.208) without closing the sat gap.
         c = _conf(ref.band_weight, opt.w0)
         w = ref.band_weight / max(ref.band_weight.sum(), 1e-9)
         rs = ref.sat_by_band / max(float(w @ ref.sat_by_band), 1e-9)
@@ -271,10 +271,8 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
         ang_s = np.arctan2(s.hue_mean_ab[:, 1], s.hue_mean_ab[:, 0])
         d_ang = (ang_s - ang_r + np.pi) % (2.0 * np.pi) - np.pi
         d_mag = (mag_s - mag_r) / np.maximum(mag_r, 0.02)
-        # hue-RELATIVE vividness only: the level component is removed (mean-centered with
-        # the same conf weights) — consistent with never learning the saturation level
         cw = c / max(c.sum(), 1e-9)
-        d_mag = d_mag - float(cw @ d_mag)
+        d_mag = d_mag - float(cw @ d_mag)                 # hue-RELATIVE vividness only
         parts.append(opt.zone_weight * c * d_ang)
         parts.append(opt.zone_weight * c * d_mag)
         # Block E signal: the same comparison per dark/bright half (half weight each)

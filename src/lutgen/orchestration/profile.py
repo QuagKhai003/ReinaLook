@@ -35,6 +35,7 @@ class LookProfile:
     n_frames: int = 0                                  # frames the look was learned from
     stage_cost: dict = field(default_factory=dict)     # per-stage final cost (fit quality)
     stage_nfev: dict = field(default_factory=dict)
+    grouping_note: str = ""                             # lighting auto-grouping info (not saved)
 
     @classmethod
     def from_fit_result(cls, result, name: str = "untitled") -> LookProfile:

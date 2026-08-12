@@ -32,7 +32,7 @@ from lutgen.engine.validate import ValidationReport, validate_cube
 from lutgen.fitter.filmmodel import FilmModel
 from lutgen.fitter.fit import FitOptions, ProgressFn, fit_film_model
 
-from .ingest import load_references
+from .ingest import load_image, load_references
 from .poolstats import compute_frame_stats, pool_stats
 from .profile import LookProfile
 
@@ -58,6 +58,52 @@ def pool_targets(ref_paths, *, max_dim: int | None = 1024):
     return pool_stats([compute_frame_stats(img) for img in images])
 
 
+# a pool whose frames span this much median luma mixes lighting moods (day + night grades
+# blend into neither — proven on a real pool, ADR-0007); the dominant group is used
+_GROUP_SPREAD = 0.18
+_LUMA = np.array([0.2126, 0.7152, 0.0722])
+
+
+def group_pool_by_lighting(ref_paths, *, max_dim: int | None = 1024):
+    """Split a reference pool into lighting groups when it mixes moods (ADR-0007).
+
+    Returns ``(kept_paths, dropped_paths, note)``. Frames are grouped by median luma with a
+    2-means threshold; when the spread is small the pool is one mood and everything is kept.
+    The larger group wins (ties: the brighter one); the note is surfaced in the UI/CLI so the
+    exclusion is never silent, and the dropped frames make the film's OTHER look."""
+    paths = list(ref_paths)
+    meds = []
+    for p in paths:
+        img = load_image(p, max_dim=max_dim)
+        meds.append(float(np.median(img.reshape(-1, 3) @ _LUMA)))
+    meds = np.array(meds)
+    if meds.max() - meds.min() <= _GROUP_SPREAD or len(paths) < 4:
+        return paths, [], ""
+    thr = (meds.max() + meds.min()) / 2.0
+    for _ in range(8):                                   # 1-D 2-means
+        lo, hi = meds[meds <= thr], meds[thr < meds]
+        if not len(lo) or not len(hi):
+            break
+        new = (lo.mean() + hi.mean()) / 2.0
+        if abs(new - thr) < 1e-6:
+            break
+        thr = new
+    bright = meds > thr + 0.04                           # stragglers near the threshold are
+    ambiguous_lo = np.abs(meds - thr) <= 0.04            # neither mood: exclude them
+    # prefer the BRIGHTER group when it can carry a fit (>= 3 frames): looks are usually
+    # applied to normally-exposed footage, and dim web frames are the less trustworthy half
+    dark = (~bright) & (~ambiguous_lo)
+    pick_bright = bright.sum() >= 3 or bright.sum() >= dark.sum()
+    chosen = bright if pick_bright else dark
+    keep = [p for p, k in zip(paths, chosen) if k]
+    drop = [p for p, k in zip(paths, chosen) if not k]
+    mood = "brighter" if pick_bright else "darker"
+    note = (f"mixed lighting detected: learned from the {mood} {len(keep)} of "
+            f"{len(paths)} frames; the {len(drop)} excluded frames are the film's other "
+            f"look — learn them as a separate profile")
+    return keep, drop, note
+
+
 def learn_profile(
     ref_paths,
     source_paths=None,
@@ -78,13 +124,17 @@ def learn_profile(
     against the tone-aligned assumed world (colour-science-only recipe — subtler by design).
     ``targets``/``source_targets`` accept precomputed :func:`pool_targets` (caching seam).
     """
+    grouping_note = ""
     if targets is None:
-        targets = pool_targets(ref_paths, max_dim=max_dim)
+        kept, _dropped, grouping_note = group_pool_by_lighting(ref_paths, max_dim=max_dim)
+        targets = pool_targets(kept, max_dim=max_dim)
     if source_targets is None and source_paths:
         source_targets = pool_targets(source_paths, max_dim=max_dim)
     result = fit_film_model(targets, source=source_targets, options=options,
                             progress=progress)
-    return LookProfile.from_fit_result(result, name=name)
+    profile = LookProfile.from_fit_result(result, name=name)
+    profile.grouping_note = grouping_note
+    return profile
 
 
 def render_cube_from_profile(
