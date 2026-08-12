@@ -95,6 +95,9 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="node2: replace Node 2; between: DWG/DI look between Node 1&2")
     ap.add_argument("--out", "-o", required=True, help="output .cube path")
     ap.add_argument("--title", default=None, help="cube TITLE (default: profile name)")
+    ap.add_argument("--film-brightness", action="store_true",
+                    help="also bake the film's absolute brightness (exposure) into the cube; "
+                         "default keeps your footage's own exposure")
     ap.add_argument("--force", action="store_true",
                     help="export even if stress validation fails (not recommended)")
     return parser
@@ -196,13 +199,19 @@ def _cmd_apply(args: argparse.Namespace) -> int:
     from lutgen.orchestration.profile import load_profile
 
     profile = load_profile(args.profile)
-    cube = render_cube_from_profile(profile, args.strength,
+    model = profile.model
+    if not args.film_brightness:                 # brightness is content unless opted in
+        from dataclasses import replace as _dc_replace
+
+        from lutgen.fitter.filmmodel import GlobalParams
+        model = _dc_replace(model, global_trim=GlobalParams())
+    cube = render_cube_from_profile(model, args.strength,
                                     title=args.title or profile.name, placement=args.placement)
 
     report = validate_baked_cube(cube, args.placement)   # spec §6: mandatory before export
     if not report.ok:
         print("stress validation FAILED:", file=sys.stderr)
-        blamed = diagnose_model(profile.model, args.strength, placement=args.placement)
+        blamed = diagnose_model(model, args.strength, placement=args.placement)
         for block, problems in blamed.items():
             for p in problems:
                 print(f"  {block}: {p}", file=sys.stderr)
