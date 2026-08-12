@@ -4,8 +4,10 @@
           headline advantage over OT, which had no parameters to show. This module turns the
           model into plain floats and back, exactly. File IO lives in orchestration/profile.py;
           this stays pure so the recipe display (Phase 2 UI) can reuse it.
-@done     model_to_dict / model_from_dict (round-trip exact, unknown keys ignored).
-@todo     Block E (hue x luma grid) fields when v2.1 lands (Phase 3).
+@done     model_to_dict / model_from_dict (round-trip exact, unknown keys ignored); nested
+          film_system section (negative/coupling/printer, ADR-0008) — absent in pre-8.2
+          profiles, which load neutral and render bit-identically.
+@todo     -
 @limits   PURE: dicts of floats only, no IO. Unknown keys are IGNORED on read
           (forward-compatible); missing keys fall back to the dataclass neutral defaults, so a
           hand-trimmed profile stays valid. Values are NOT range-clamped here — the model's
@@ -19,6 +21,7 @@ from __future__ import annotations
 from dataclasses import asdict, fields
 
 from .crosstalk import CrosstalkParams
+from .filmsystem import CouplingParams, FilmSystemParams, NegativeParams, PrintParams
 from .fourierhue import FourierHueParams
 from .globaltrim import GlobalParams
 from .huezone import HueZoneParams
@@ -46,6 +49,11 @@ def model_to_dict(model: FilmModel) -> dict:
         "hue_zones": asdict(model.hue_zones),
         "global": asdict(model.global_trim),
         "hue_fourier": asdict(model.hue_fourier),
+        "film_system": {
+            "negative": asdict(model.film_system.negative),
+            "coupling": asdict(model.film_system.coupling),
+            "printer": asdict(model.film_system.printer),
+        },
     }
 
 
@@ -57,7 +65,13 @@ def model_from_dict(data: dict) -> FilmModel:
     if not isinstance(data, dict):
         raise TypeError(f"model params must be a dict, got {type(data).__name__}")
     curves_d = data.get("curves", {})
+    fs_d = data.get("film_system", {})
     return FilmModel(
+        film_system=FilmSystemParams(
+            negative=_from_known(NegativeParams, fs_d.get("negative", {})),
+            coupling=_from_known(CouplingParams, fs_d.get("coupling", {})),
+            printer=_from_known(PrintParams, fs_d.get("printer", {})),
+        ),
         crosstalk=_from_known(CrosstalkParams, data.get("crosstalk", {})),
         curves=(
             _from_known(SCurveParams, curves_d.get("r", {})),

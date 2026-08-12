@@ -68,6 +68,26 @@ for _cf in ("t0", "tc1", "tc2", "tc3", "tc4", "ts1", "ts2", "ts3", "ts4"):
     _SPEC += [("Hue curve — sat coefs", ("hue_fourier", _cf), _cf, -0.25, 0.25, 0.005, _ID)]
 for _cf in ("l0", "lc1", "lc2", "ls1", "ls2"):
     _SPEC += [("Hue curve — brightness mod", ("hue_fourier", _cf), _cf, -0.2, 0.2, 0.005, _ID)]
+# Block F film system (ADR-0008): negative → coupling → print
+_SPEC += [
+    ("Film system — negative", ("film_system", "negative", "g_r"), "R gamma ×", 0.5, 2.0, 0.005, _ID),
+    ("Film system — negative", ("film_system", "negative", "g_g"), "G gamma ×", 0.5, 2.0, 0.005, _ID),
+    ("Film system — negative", ("film_system", "negative", "g_b"), "B gamma ×", 0.5, 2.0, 0.005, _ID),
+    ("Film system — negative", ("film_system", "negative", "toe"), "Toe", 0.0, 1.0, 0.01, _ID),
+    ("Film system — negative", ("film_system", "negative", "toe_at"), "Toe at (stops)", -6.0, -1.0, 0.1, _ID),
+]
+_SPEC += [
+    ("Film system — coupling", ("film_system", "coupling", k), lbl, 0.0, 0.25, 0.005, _ID)
+    for k, lbl in (("rg", "R ⊣ G"), ("rb", "R ⊣ B"), ("gr", "G ⊣ R"),
+                   ("gb", "G ⊣ B"), ("br", "B ⊣ R"), ("bg", "B ⊣ G"))
+]
+_SPEC += [
+    ("Film system — print", ("film_system", "printer", "slope"), "Contrast ×", 0.5, 2.5, 0.01, _ID),
+    ("Film system — print", ("film_system", "printer", "shoulder"), "Shoulder", 0.0, 1.0, 0.01, _ID),
+    ("Film system — print", ("film_system", "printer", "ptoe"), "Black convergence", 0.0, 1.0, 0.01, _ID),
+    ("Film system — print", ("film_system", "printer", "range_hi"), "White at (stops)", 1.0, 6.0, 0.1, _ID),
+    ("Film system — print", ("film_system", "printer", "range_lo"), "Black at (stops)", -8.0, -1.0, 0.1, _ID),
+]
 
 
 def _get(d: dict, path: tuple[str, ...]) -> float:

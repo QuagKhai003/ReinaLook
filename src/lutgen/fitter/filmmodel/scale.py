@@ -8,7 +8,9 @@
           + hue zones. Colour 0 makes all three curves identical — the cast is gone, the
           contrast stays. (First version grouped whole curves under tone; the user's yellow
           cast then sat in the wrong dial and Color did nothing visible.)
-@done     scaled_model(model, tone_amount, color_amount) with mean/deviation curve split.
+@done     scaled_model(model, tone_amount, color_amount) with mean/deviation curve split;
+          Block F split (ADR-0008): tone = mean neg gamma + toe + whole print stage,
+          color = per-channel gamma deviation + DIR coupling.
 @todo     -
 @limits   PURE: no IO. Amounts clamp to [0, 1]. Recomposed curve params are clamped to the
           fit bounds (toe/shoulder >= 0, slope [0.5, 2], pivot [0.3, 0.7]) because the
@@ -22,6 +24,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from .crosstalk import CrosstalkParams
+from .filmsystem import CouplingParams, FilmSystemParams, NegativeParams, PrintParams
 from .fourierhue import FourierHueParams
 from .globaltrim import GlobalParams
 from .huezone import HueZoneParams
@@ -55,6 +58,24 @@ def _split_curves(curves, t: float, c: float):
     return tuple(out)
 
 
+def _split_film_system(fs: FilmSystemParams, t: float, c: float) -> FilmSystemParams:
+    """Same decomposition for Block F: TONE = shared negative shape (mean gamma, toe) +
+    the whole print stage (contrast/convergence); COLOR = per-channel gamma deviation +
+    DIR coupling. Gammas clamp to a sane positive range (the t/c mix is not convex)."""
+    g = (fs.negative.g_r, fs.negative.g_g, fs.negative.g_b)
+    mean = sum(g) / 3.0
+    g_r, g_g, g_b = (min(2.0, max(0.5, 1.0 + t * (mean - 1.0) + c * (v - mean))) for v in g)
+    return FilmSystemParams(
+        negative=NegativeParams(g_r=g_r, g_g=g_g, g_b=g_b,
+                                toe=t * fs.negative.toe, toe_at=fs.negative.toe_at),
+        coupling=CouplingParams(**{k: max(0.0, v * c)
+                                   for k, v in asdict(fs.coupling).items()}),
+        printer=PrintParams(slope=1.0 + t * (fs.printer.slope - 1.0),
+                            shoulder=t * fs.printer.shoulder, ptoe=t * fs.printer.ptoe,
+                            range_hi=fs.printer.range_hi, range_lo=fs.printer.range_lo),
+    )
+
+
 def scaled_model(model: FilmModel, tone_amount: float = 1.0,
                  color_amount: float = 1.0) -> FilmModel:
     """The model with its TONE (exposure + shared curve shape) scaled by ``tone_amount``
@@ -78,4 +99,5 @@ def scaled_model(model: FilmModel, tone_amount: float = 1.0,
         sat_luma=sat_luma,
         hue_zones=hue_zones,
         hue_fourier=hue_fourier,
+        film_system=_split_film_system(model.film_system, t, c),
     )
