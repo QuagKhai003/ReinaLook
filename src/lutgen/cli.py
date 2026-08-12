@@ -171,7 +171,9 @@ def _cmd_learn(args: argparse.Namespace) -> int:
     from lutgen.orchestration.profile import save_profile
 
     print(frame_count_hint(len(args.refs)))
-    options = FitOptions(n_samples=1200, max_nfev=30) if args.fast else None
+    options = (FitOptions(n_samples=1200, max_nfev=30, ridge_huesat=0.25)  # draft:
+               # stiff colour ridge — small clouds make wiggly hue curves
+               if args.fast else None)
     profile = learn_profile(
         args.refs,
         name=args.name or Path(args.out).stem,

@@ -66,6 +66,27 @@ def _fmt_zones(hz) -> list[str]:
     return rows or ["  neutral"]
 
 
+def _fmt_fourier(fh) -> list[str]:
+    import numpy as np
+
+    from lutgen.fitter.filmmodel.fourierhue import eval_shift, eval_trim
+    if fh.is_identity():
+        return ["  neutral"]
+    theta = np.linspace(-math.pi, math.pi, 360, endpoint=False)
+    shift = np.degrees(eval_shift(theta, fh))
+    trim = eval_trim(theta, fh) * 100.0
+    rows = []
+    if np.abs(shift).max() > 0.2:
+        i, j = int(np.argmax(shift)), int(np.argmin(shift))
+        rows.append(f"  hue: {shift[i]:+.1f}° @ {math.degrees(theta[i]):.0f}° · "
+                    f"{shift[j]:+.1f}° @ {math.degrees(theta[j]):.0f}°")
+    if np.abs(trim).max() > 0.5:
+        i, j = int(np.argmax(trim)), int(np.argmin(trim))
+        rows.append(f"  sat: {trim[i]:+.0f}% @ {math.degrees(theta[i]):.0f}° · "
+                    f"{trim[j]:+.0f}% @ {math.degrees(theta[j]):.0f}°")
+    return rows or ["  neutral"]
+
+
 def recipe_summary(profile: LookProfile) -> str:
     """The learned recipe as readable grouped text (near-neutral entries omitted)."""
     m = profile.model
@@ -81,6 +102,8 @@ def recipe_summary(profile: LookProfile) -> str:
     lines += _fmt_satluma(m.sat_luma)
     lines.append("Hue zones")
     lines += _fmt_zones(m.hue_zones)
+    lines.append("Hue curve (v2.1)")
+    lines += _fmt_fourier(m.hue_fourier)
     if profile.stage_cost:
         cost = " / ".join(f"{k} {v:.3g}" for k, v in profile.stage_cost.items())
         lines.append(f"Fit: {profile.n_frames} frames · cost {cost}")

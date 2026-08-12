@@ -38,6 +38,9 @@ N_ZONES = len(ZONE_NAMES)
 # Pixels with chroma below this are achromatic — excluded from hue-zone stats (their hue
 # angle is numerical noise).
 CHROMA_FLOOR = 0.01
+# Fine hue statistics for the v2.1 Fourier hue curve (ADR-0007): 12 uniform hue bins.
+N_HUE_BINS = 12
+HUE_BIN_CENTERS = -np.pi + (np.arange(N_HUE_BINS) + 0.5) * (2.0 * np.pi / N_HUE_BINS)
 _TWO_PI = 2.0 * np.pi
 
 
@@ -53,6 +56,8 @@ class FrameStats:
     band_weight: np.ndarray         # (N_BANDS,) pixel share per L band (sums to 1)
     zone_mean_ab: np.ndarray        # (N_ZONES, 2) mean (a,b) per hue zone (chromatic px only)
     zone_weight: np.ndarray         # (N_ZONES,) chromatic-pixel share per zone (sums to <= 1)
+    hue_mean_ab: np.ndarray         # (N_HUE_BINS, 2) mean (a,b) per fine hue bin (ADR-0007)
+    hue_weight: np.ndarray          # (N_HUE_BINS,) chromatic-pixel share per bin
     black_point: float              # Oklab L p1
     white_point: float              # Oklab L p99
 
@@ -73,6 +78,8 @@ class PooledTargets:
     band_weight: np.ndarray
     zone_mean_ab: np.ndarray
     zone_weight: np.ndarray
+    hue_mean_ab: np.ndarray
+    hue_weight: np.ndarray
     black_point: float
     white_point: float
     n_frames: int
@@ -113,6 +120,8 @@ def compute_frame_stats(image: np.ndarray) -> FrameStats:
     chromatic = chroma >= CHROMA_FLOOR
     zone_mean_ab = np.zeros((N_ZONES, 2))
     zone_weight = np.zeros(N_ZONES)
+    hue_mean_ab = np.zeros((N_HUE_BINS, 2))
+    hue_weight = np.zeros(N_HUE_BINS)
     if chromatic.any():
         hue = np.arctan2(lab[chromatic, 2], lab[chromatic, 1])
         zidx = _zone_index(hue)
@@ -122,6 +131,17 @@ def compute_frame_stats(image: np.ndarray) -> FrameStats:
             zone_weight[z] = m.sum() / n
             if m.any():
                 zone_mean_ab[z] = ab[m].mean(axis=0)
+        # SOFT (triangular) assignment over the two nearest bin centres: the statistics are
+        # then smooth functions of pixel hue, which keeps the fit's finite-difference
+        # Jacobian consistent (hard binning made stage 3 unoptimizable — ADR-0007).
+        bin_w = _TWO_PI / N_HUE_BINS
+        d = np.abs((hue[:, None] - HUE_BIN_CENTERS[None, :] + np.pi) % _TWO_PI - np.pi)
+        w = np.maximum(0.0, 1.0 - d / bin_w)            # (n_chromatic, N_HUE_BINS), rows sum ~1
+        mass = w.sum(axis=0)
+        hue_weight = mass / n
+        safe = np.maximum(mass, 1e-9)[:, None]
+        hue_mean_ab = (w.T @ ab) / safe
+        hue_mean_ab[mass < 1e-9] = 0.0
 
     return FrameStats(
         channel_quantiles=channel_quantiles,
@@ -131,6 +151,8 @@ def compute_frame_stats(image: np.ndarray) -> FrameStats:
         band_weight=band_weight,
         zone_mean_ab=zone_mean_ab,
         zone_weight=zone_weight,
+        hue_mean_ab=hue_mean_ab,
+        hue_weight=hue_weight,
         black_point=float(np.quantile(luma, 0.01)),
         white_point=float(np.quantile(luma, 0.99)),
     )
@@ -155,6 +177,8 @@ def pool_stats(frames: list[FrameStats]) -> PooledTargets:
         band_weight=mean("band_weight"),
         zone_mean_ab=med("zone_mean_ab"),
         zone_weight=mean("zone_weight"),
+        hue_mean_ab=med("hue_mean_ab"),
+        hue_weight=mean("hue_weight"),
         black_point=float(np.median([f.black_point for f in frames])),
         white_point=float(np.median([f.white_point for f in frames])),
         n_frames=len(frames),
@@ -183,6 +207,8 @@ def neutral_prior() -> PooledTargets:
         band_weight=np.full(N_BANDS, 1.0 / N_BANDS),
         zone_mean_ab=0.06 * zone_dirs,
         zone_weight=np.full(N_ZONES, 1.0 / N_ZONES),
+        hue_mean_ab=0.06 * np.column_stack([np.cos(HUE_BIN_CENTERS), np.sin(HUE_BIN_CENTERS)]),
+        hue_weight=np.full(N_HUE_BINS, 1.0 / N_HUE_BINS),
         black_point=0.02,
         white_point=0.95,
         n_frames=0,

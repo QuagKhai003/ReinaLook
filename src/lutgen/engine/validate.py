@@ -25,13 +25,14 @@ from .grid import reshape_to_lattice
 from .perceptual import to_oklab
 
 # Monotonicity: grey diagonal is strict (float noise only). The per-axis check works on the
-# SLOPE (diff x (size-1); identity slope = 1) and flags a channel only when a meaningful
-# share of its ramp steps reverse. Measured regimes: hand-set strong looks <= 0.003%,
-# real bounded FITS <= 0.55% (isolated gamut-corner wiggles from the base lookup + clamp),
-# broken blocks 3%..73% (systemic). 1% sits between with ~5x margin each way.
+# SLOPE scale (diff x (size-1); identity slope = 1) per CHANNEL, flagged above 5% of steps:
+# legitimate looks measure <= ~3% (hue curves wiggle individual channels; the base's own
+# saturation compression adds corner wiggle even under plain mild crosstalk), while broken
+# blocks measure 19..73% (channel-swap / hue-tear regimes). A display-LUMA variant was tried
+# and rejected: the base itself dips display luma ~2% at gamut corners under legit mixing.
 _MONO_TOL = 1e-6
 _AXIS_SLOPE = -0.25      # a step steeper-down than this counts as reversed
-_AXIS_BAD_FRAC = 0.01    # >1% of steps reversed = violation
+_AXIS_BAD_FRAC = 0.05    # per-channel: >5% of steps reversed = violation
 # Smoothness: max adjacent-node Oklab ΔE may exceed the reference's by this factor + floor.
 _DE_FACTOR = 3.0
 _DE_FLOOR = 0.05

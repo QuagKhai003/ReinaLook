@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import asdict, fields
 
 from .crosstalk import CrosstalkParams
+from .fourierhue import FourierHueParams
 from .globaltrim import GlobalParams
 from .huezone import HueZoneParams
 from .model import FilmModel
@@ -44,6 +45,7 @@ def model_to_dict(model: FilmModel) -> dict:
         "sat_luma": asdict(model.sat_luma),
         "hue_zones": asdict(model.hue_zones),
         "global": asdict(model.global_trim),
+        "hue_fourier": asdict(model.hue_fourier),
     }
 
 
@@ -65,4 +67,5 @@ def model_from_dict(data: dict) -> FilmModel:
         sat_luma=_from_known(SatLumaParams, data.get("sat_luma", {})),
         hue_zones=_from_known(HueZoneParams, data.get("hue_zones", {})),
         global_trim=_from_known(GlobalParams, data.get("global", {})),
+        hue_fourier=_from_known(FourierHueParams, data.get("hue_fourier", {})),
     )

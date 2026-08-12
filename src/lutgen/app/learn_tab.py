@@ -143,7 +143,8 @@ class LearnTab(QtWidgets.QWidget):
         if not self._paths or (self._thread is not None and self._thread.isRunning()):
             return
         paths = list(self._paths)
-        options = FitOptions(n_samples=1200, max_nfev=30) if self._fast.isChecked() else None
+        options = (FitOptions(n_samples=1200, max_nfev=30, ridge_huesat=0.25)
+                   if self._fast.isChecked() else None)
         self._cancel = False
         self._set_running(True)
 
