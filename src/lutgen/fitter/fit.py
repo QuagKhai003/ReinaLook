@@ -7,10 +7,13 @@
           same statistics poolstats measures, and least-squares them against the reference
           targets. STAGED (non-negotiable): tone curves first, then crosstalk, then C/D —
           each stage freezes the previous ones. Fitting all params at once is not stable.
-@done     FitOptions, FitResult, fit_film_model (3 staged bounded scipy least_squares),
+@done     FitOptions, FitResult, fit_film_model (4 staged bounded scipy least_squares),
           synth_samples (deterministic source cloud), exposure alignment of the prior world
           (ADR-0003: scene brightness is content — the assumed world's median exposure is
           matched to the pool's so tone curves learn SHAPE; real source pools never rescaled).
+          Fit-v2 losses (ADR-0008 b8.3): tail-weighted tone quantiles, saturation-
+          distribution shape residual (level-free tail/median ratios, Hunt-compensated,
+          ref p95 tile-debiased, asymmetric under-sat), robust soft-l1 loss.
 @todo     Global exposure/black trims (spec budget) if acceptance shows they're needed.
           Outlier frame down-weighting (poolstats @todo) — evaluate on real pools.
 @limits   Conditional colour (ADR-0006): band_mean_ab residuals in every stage teach the
@@ -84,6 +87,32 @@ class FitOptions:
     diff_step: float = 0.02           # finite-difference secant step: statistics of a
                                       # finite sample cloud carry O(1/n) quantization;
                                       # a wide secant averages over it (ADR-0007)
+    # ── fit-v2 losses (ADR-0008 b8.3) ──
+    # Defaults are CONSERVATIVE in the legacy stage layout: the b8.3 ablations showed
+    # tail_weight/hunt_alpha in these stages perturb the tone solution enough to break
+    # the (fragile, synthetic-worst-case) hue-block recoveries, because the legacy model
+    # has no proper punch lever for them to feed. b8.4 rewires the stages around Block F
+    # (print slope IS the punch mechanism) and activates them there.
+    tail_weight: float = 1.0          # tone-quantile tail boost: extremes weigh up to this
+                                      # factor (film's identity lives at toe/shoulder);
+                                      # 1 = uniform. Activated in the b8.4 stage layout.
+    spread_weight: float = 2.0        # saturation-DISTRIBUTION shape residual (Hasler:
+                                      # punch = tails vs median, level-free ratios) —
+                                      # POLISH stage only (safe: anchored refinement)
+    hunt_alpha: float = 0.0           # Hunt-effect compensation: perceived colourfulness
+                                      # rises with luminance — per-BAND sat is weighted by
+                                      # (1 + alpha*(bandL - 0.45)) before shape comparison.
+                                      # Off by default pending b8.4 (measurably degraded
+                                      # hue recovery in the legacy layout)
+    under_sat: float = 2.0            # asymmetry on the spread residual only: losing tail
+                                      # saturation costs this x more than gaining it
+                                      # (level residuals stay symmetric — vividness contract)
+    loss: str = "linear"              # scipy loss. soft_l1 was trialled per ADR-0008 and
+                                      # REJECTED as default: its Jacobian reweighting
+                                      # crushes the small hue-angle residuals (hue-twist
+                                      # recovery corr 0.92 -> 0.38 measured); median
+                                      # pooling already provides the outlier robustness
+    f_scale: float = 0.3              # knee if a robust loss is chosen explicitly
     exposure_align: bool = True       # prior path only. ON (default): the source world adopts
                                       # the pool's tone distribution, so curves learn the tone
                                       # SHAPE valid at the footage's own level — coherent with
@@ -229,12 +258,20 @@ def _conf(w: np.ndarray, w0: float) -> np.ndarray:
 
 def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
                *, tone: bool, balance: bool, chroma: bool, zones: bool,
-               hue_luma: bool = False, tone_weight: float | None = None) -> np.ndarray:
+               hue_luma: bool = False, spread: bool = False,
+               tone_weight: float | None = None) -> np.ndarray:
     s = compute_frame_stats(out_display)
     parts = []
     if tone:
         tw = opt.quantile_weight if tone_weight is None else tone_weight
-        parts.append(tw * (s.channel_quantiles - ref.channel_quantiles).ravel())
+        # tail-weighted quantile residuals (ADR-0008): the toe/shoulder ends of the
+        # distribution carry the film's tonal identity — weight rises quadratically
+        # from 1 at the median to `tail_weight` at the extremes. PRIMARY tone stages
+        # only: in the later stages tone is a soft anchor, and tail-boosting the anchor
+        # measurably degraded Block E recovery (b8.3 ablation).
+        wq = 1.0 if tone_weight is not None else (
+            1.0 + (opt.tail_weight - 1.0) * (2.0 * np.abs(QUANTILES - 0.5)) ** 2)
+        parts.append((tw * wq * (s.channel_quantiles - ref.channel_quantiles)).ravel())
     if balance:
         parts.append(opt.balance_weight * (s.mean_lab - ref.mean_lab))
         # conditional balance (ADR-0006 A): colour per luminance band, conf-damped for thin bands
@@ -248,9 +285,38 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
         # result (greens 1.145→0.98 vs ref 1.208) without closing the sat gap.
         c = _conf(ref.band_weight, opt.w0)
         w = ref.band_weight / max(ref.band_weight.sum(), 1e-9)
-        rs = ref.sat_by_band / max(float(w @ ref.sat_by_band), 1e-9)
-        ss = s.sat_by_band / max(float(w @ s.sat_by_band), 1e-9)
+        # Hunt compensation (ADR-0008): perceived colourfulness rises with luminance, so
+        # each band's measured saturation is weighted up by its brightness BEFORE the
+        # shape normalization — mismatches in bright bands (where perception amplifies
+        # them) then cost more. A global Hunt factor would cancel in the normalization;
+        # the per-band factor is where the effect is actually expressible.
+        band_l = np.concatenate([[L_BAND_EDGES[0] / 2],
+                                 (L_BAND_EDGES[:-1] + L_BAND_EDGES[1:]) / 2,
+                                 [(L_BAND_EDGES[-1] + 1.0) / 2]])
+        hunt = 1.0 + opt.hunt_alpha * (band_l - 0.45)
+        rs_h = ref.sat_by_band * hunt
+        ss_h = s.sat_by_band * hunt
+        rs = rs_h / max(float(w @ rs_h), 1e-9)
+        ss = ss_h / max(float(w @ ss_h), 1e-9)
         parts.append(opt.chroma_weight * c * (ss - rs))
+    if spread:
+        # saturation-DISTRIBUTION shape (ADR-0008, Hasler): tails relative to the median —
+        # the punch statistic the per-band means miss. Level-free ratios (vividness
+        # contract intact). The reference p95 is debiased with the tile estimate (a big
+        # dull region cannot dilute the subject's tail). Fitted in the POLISH stage only:
+        # curve slope is the punch mechanism (sat follows slope — research brief), but the
+        # term is not exposure-invariant en route, so in stage 1 it bent the tone landscape
+        # (satluma dragged to 0.75 compensating), and in stage 3 it drowned the hue
+        # personality signal (corr 0.78 -> 0.46) — both measured in the b8.3 ablations.
+        # Polish is anchored at the settled solution: punch pressure, no re-opening.
+        r_q = ref.sat_quantiles.copy()
+        r_q[-1] = max(r_q[-1], ref.sat_tile_p95)
+        r_shape = r_q / max(r_q[1], 1e-9)                # index 1 = the median
+        s_shape = s.sat_quantiles / max(s.sat_quantiles[1], 1e-9)
+        d = np.delete(s_shape - r_shape, 1)              # median entry is identically 0
+        # asymmetric (ADR-0008): losing tail saturation costs more than gaining it
+        d = np.where(d < 0.0, d * np.sqrt(opt.under_sat), d)
+        parts.append(opt.spread_weight * d)
     if hue_luma:
         # per-hue LUMINANCE, relative to each side's overall mean L (level-free): how bright
         # the film renders each colour family — the lush-vs-olive greens axis. Fitted in
@@ -329,6 +395,7 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
             return np.concatenate([data, reg])
 
         sol = least_squares(f, x0, bounds=(lo, hi), method="trf",
+                            loss=opt.loss, f_scale=opt.f_scale,
                             diff_step=opt.diff_step, max_nfev=opt.max_nfev)
         result.stage_cost[name] = float(sol.cost)
         result.stage_nfev[name] = int(sol.nfev)
@@ -388,7 +455,7 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
         "polish", p0, p_lo, p_hi, p_ridge, p0,
         _polish_model,
         {"tone": True, "balance": True, "chroma": False, "zones": False, "hue_luma": True,
-         "tone_weight": opt.tone_anchor_weight},
+         "spread": True, "tone_weight": opt.tone_anchor_weight},
     )
     global_trim, curves = _tone_from_vec(pol_v[:13])
     crosstalk = _ct_from_vec(pol_v[13:])

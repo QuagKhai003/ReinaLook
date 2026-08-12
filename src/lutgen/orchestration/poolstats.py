@@ -42,6 +42,13 @@ CHROMA_FLOOR = 0.01
 N_HUE_BINS = 12
 HUE_BIN_CENTERS = -np.pi + (np.arange(N_HUE_BINS) + 0.5) * (2.0 * np.pi / N_HUE_BINS)
 _TWO_PI = 2.0 * np.pi
+# Saturation-distribution probe points (ADR-0008): punch lives in the TAILS of the chroma
+# distribution, not its mean (Hasler–Süsstrunk) — the fit compares these as level-free
+# ratios to the median, so the vividness contract (level never learned) is preserved.
+SAT_QUANTILES = np.array([0.25, 0.5, 0.75, 0.9, 0.95])
+# Tile grid for the spatially-balanced tail estimate (JPEG debias, ADR-0008): frame-level
+# p95 lets large dull regions dilute the tail a compressed reference still carries.
+_TILE_GRID = 4
 
 
 @dataclass
@@ -65,6 +72,11 @@ class FrameStats:
     hue2_weight: np.ndarray         # (2, N_HUE_BINS)
     hue_mean_l: np.ndarray          # (N_HUE_BINS,) mean L per hue bin — how BRIGHT the film
                                     # renders each colour family (lush vs olive greens)
+    sat_quantiles: np.ndarray       # (len(SAT_QUANTILES),) saturation (C/L) distribution —
+                                    # the punch statistic (tails vs median), ADR-0008
+    sat_tile_p95: float             # max over a 4x4 tile grid of per-tile sat p95 — the
+                                    # most colourful region's tail (dull-dilution debias);
+                                    # equals the global p95 for flat (N,3) input
     black_point: float              # Oklab L p1
     white_point: float              # Oklab L p99
 
@@ -91,6 +103,8 @@ class PooledTargets:
     hue2_mean_ab: np.ndarray
     hue2_weight: np.ndarray
     hue_mean_l: np.ndarray
+    sat_quantiles: np.ndarray
+    sat_tile_p95: float
     black_point: float
     white_point: float
     n_frames: int
@@ -104,7 +118,8 @@ def _zone_index(hue: np.ndarray) -> np.ndarray:
 
 def compute_frame_stats(image: np.ndarray) -> FrameStats:
     """Compute :class:`FrameStats` from one ``(H,W,3)`` (or ``(N,3)``) g2.4 image in [0,1]."""
-    pixels = np.asarray(image, dtype=np.float64).reshape(-1, 3)
+    arr = np.asarray(image, dtype=np.float64)
+    pixels = arr.reshape(-1, 3)
     if pixels.shape[0] == 0:
         raise ValueError("empty image")
 
@@ -119,6 +134,22 @@ def compute_frame_stats(image: np.ndarray) -> FrameStats:
 
     band_idx = np.digitize(luma, L_BAND_EDGES)
     saturation = chroma / np.maximum(luma, 0.05)
+    # tail statistics use a HIGHER luma floor (0.15): with the 0.05 floor a darkened frame
+    # inflates near-black pixels into fake saturation tails, and the fit then learns real
+    # shadow desaturation + stolen exposure chasing them (measured in the b8.3 ablation)
+    sat_tail = chroma / np.maximum(luma, 0.15)
+    sat_quantiles = np.quantile(sat_tail, SAT_QUANTILES)
+    # spatially-balanced tail (ADR-0008): the MAX over tiles of per-tile p95 — a big dull
+    # wall cannot dilute the saturated subject's tail the way a frame-level p95 lets it
+    # (the in-tile p95 keeps it robust to lone pixels; the cross-tile max finds the subject)
+    if arr.ndim == 3 and min(arr.shape[0], arr.shape[1]) >= _TILE_GRID:
+        sat_img = sat_tail.reshape(arr.shape[0], arr.shape[1])
+        tile_p95 = [np.quantile(t, 0.95)
+                    for row in np.array_split(sat_img, _TILE_GRID, axis=0)
+                    for t in np.array_split(row, _TILE_GRID, axis=1)]
+        sat_tile_p95 = float(max(tile_p95))
+    else:
+        sat_tile_p95 = float(sat_quantiles[-1])
     chroma_by_band = np.zeros(N_BANDS)
     sat_by_band = np.zeros(N_BANDS)
     band_mean_ab = np.zeros((N_BANDS, 2))
@@ -187,6 +218,8 @@ def compute_frame_stats(image: np.ndarray) -> FrameStats:
         hue2_mean_ab=hue2_mean_ab,
         hue2_weight=hue2_weight,
         hue_mean_l=hue_mean_l,
+        sat_quantiles=sat_quantiles,
+        sat_tile_p95=sat_tile_p95,
         black_point=float(np.quantile(luma, 0.01)),
         white_point=float(np.quantile(luma, 0.99)),
     )
@@ -217,6 +250,8 @@ def pool_stats(frames: list[FrameStats]) -> PooledTargets:
         hue2_mean_ab=med("hue2_mean_ab"),
         hue2_weight=mean("hue2_weight"),
         hue_mean_l=med("hue_mean_l"),
+        sat_quantiles=med("sat_quantiles"),
+        sat_tile_p95=float(np.median([f.sat_tile_p95 for f in frames])),
         black_point=float(np.median([f.black_point for f in frames])),
         white_point=float(np.median([f.white_point for f in frames])),
         n_frames=len(frames),
@@ -255,6 +290,9 @@ def neutral_prior() -> PooledTargets:
                                                      np.sin(HUE_BIN_CENTERS)]), (2, 1, 1)),
         hue2_weight=np.full((2, N_HUE_BINS), 0.5 / N_HUE_BINS),
         hue_mean_l=np.full(N_HUE_BINS, 0.45),
+        # a natural world's saturation distribution around the 0.13 level (tails ≈ 2× median)
+        sat_quantiles=0.13 * np.array([0.6, 1.0, 1.4, 1.8, 2.1]),
+        sat_tile_p95=0.13 * 2.1,
         black_point=0.02,
         white_point=0.95,
         n_frames=0,
