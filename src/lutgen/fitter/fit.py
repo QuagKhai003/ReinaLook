@@ -231,15 +231,18 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
         parts.append((opt.band_balance_weight * cb *
                       (s.band_mean_ab - ref.band_mean_ab)).ravel())
     if chroma:
+        # SATURATION (chroma/L) targets — brightness-invariant colourfulness: a dark pool of
+        # vivid frames must not teach desaturation (ADR-0007, user: "dull, baked over")
         c = _conf(ref.band_weight, opt.w0)
-        parts.append(opt.chroma_weight * c * (s.chroma_by_band - ref.chroma_by_band))
+        parts.append(opt.chroma_weight * c * (s.sat_by_band - ref.sat_by_band))
     if zones:
         # fine 12-bin hue targets (ADR-0007), compared in HUE-ANGLE and CHROMA-RATIO units —
         # raw a/b differences scale with chroma (~0.05) and drown under the ridge; angle and
         # ratio are unit-compatible with the shift/trim parameters themselves.
         c = _conf(ref.hue_weight, opt.w0)
-        mag_r = np.hypot(ref.hue_mean_ab[:, 0], ref.hue_mean_ab[:, 1])
-        mag_s = np.hypot(s.hue_mean_ab[:, 0], s.hue_mean_ab[:, 1])
+        # magnitudes normalized by each side's mean L: brightness-invariant per-hue vividness
+        mag_r = np.hypot(ref.hue_mean_ab[:, 0], ref.hue_mean_ab[:, 1]) / max(ref.mean_lab[0], 0.05)
+        mag_s = np.hypot(s.hue_mean_ab[:, 0], s.hue_mean_ab[:, 1]) / max(s.mean_lab[0], 0.05)
         c = c * (mag_r / (mag_r + 0.01))                # near-achromatic bins: angle is noise
         ang_r = np.arctan2(ref.hue_mean_ab[:, 1], ref.hue_mean_ab[:, 0])
         ang_s = np.arctan2(s.hue_mean_ab[:, 1], s.hue_mean_ab[:, 0])
