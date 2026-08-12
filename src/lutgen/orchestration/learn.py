@@ -3,8 +3,10 @@
 @context  The two-phase product shape (spec §4): LEARN a film-shaped recipe from 5-15 graded
           frames once, then APPLY any saved profile to bake a .cube. This module wires
           ingest -> poolstats -> fit (learn) and profile -> FilmModel -> grid bake (apply).
-@done     learn_profile(ref_paths, targets=...) -> LookProfile; pool_targets (the cacheable
-          ingest+stats half — spec §9 caching seam); render_cube_from_profile(profile) -> Cube;
+@done     learn_profile(ref_paths, source_paths=None, targets=...) -> LookProfile — refs-only
+          is THE workflow (ADR-0004: full look vs the normal-world prior, Block G absorbs
+          level); source_paths is an optional power path (real neutral pool = measured source
+          world); pool_targets (the cacheable ingest+stats half); render_cube_from_profile;
           frame_count_hint (the single-image wall, surfaced per spec §4); validate_baked_cube
           + diagnose_model (§6 stress gate with per-block attribution — the CLI export gate).
 @todo     Source-adaptive white-balance trim in Apply (Phase 4).
@@ -58,22 +60,30 @@ def pool_targets(ref_paths, *, max_dim: int | None = 1024):
 
 def learn_profile(
     ref_paths,
+    source_paths=None,
     *,
     name: str = "untitled",
     max_dim: int | None = 1024,
     options: FitOptions | None = None,
     progress: ProgressFn | None = None,
     targets=None,
+    source_targets=None,
 ) -> LookProfile:
     """LEARN: reference frames -> fitted Look Profile (spec §4 Learn mode).
 
-    Loads the pool, computes robust pooled statistics (or reuses precomputed ``targets``
-    from :func:`pool_targets` — the caching seam), runs the staged fit against the neutral
-    prior, and wraps the result as a savable profile.
+    With ``source_paths`` (a pool of the USER'S OWN neutral frames — ADR-0004), their pooled
+    statistics become the fit's measured source world: the absolute tone reshape from that
+    footage to the graded look becomes real, learnable signal (this is the unpaired
+    Neutral+Graded mode on the parametric fitter). Without a source pool, the fit runs
+    against the tone-aligned assumed world (colour-science-only recipe — subtler by design).
+    ``targets``/``source_targets`` accept precomputed :func:`pool_targets` (caching seam).
     """
     if targets is None:
         targets = pool_targets(ref_paths, max_dim=max_dim)
-    result = fit_film_model(targets, options=options, progress=progress)
+    if source_targets is None and source_paths:
+        source_targets = pool_targets(source_paths, max_dim=max_dim)
+    result = fit_film_model(targets, source=source_targets, options=options,
+                            progress=progress)
     return LookProfile.from_fit_result(result, name=name)
 
 
