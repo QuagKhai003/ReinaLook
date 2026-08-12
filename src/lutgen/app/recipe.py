@@ -93,6 +93,36 @@ def _fmt_fourier(fh) -> list[str]:
     return rows or ["  neutral"]
 
 
+def _fmt_filmsystem(fs) -> list[str]:
+    if fs.is_identity():
+        return ["  neutral"]
+    rows = []
+    n = fs.negative
+    bits = [f"{ch} γ ×{v:.2f}" for ch, v in (("R", n.g_r), ("G", n.g_g), ("B", n.g_b))
+            if abs(v - 1.0) > _EPS]
+    if abs(n.toe) > _EPS:
+        bits.append(f"toe {n.toe:.2f} @ {n.toe_at:+.1f} st")
+    if bits:
+        rows.append("  negative: " + " · ".join(bits))
+    cp = fs.coupling
+    coup = [f"{k.upper()} {v:.3f}" for k, v in
+            (("rg", cp.rg), ("rb", cp.rb), ("gr", cp.gr),
+             ("gb", cp.gb), ("br", cp.br), ("bg", cp.bg)) if abs(v) > _EPS]
+    if coup:
+        rows.append("  coupling: " + " · ".join(coup))
+    pr = fs.printer
+    bits = []
+    if abs(pr.slope - 1.0) > _EPS:
+        bits.append(f"contrast ×{pr.slope:.2f}")
+    if abs(pr.shoulder) > _EPS:
+        bits.append(f"shoulder {pr.shoulder:.2f} @ +{pr.range_hi:.1f} st")
+    if abs(pr.ptoe) > _EPS:
+        bits.append(f"black conv {pr.ptoe:.2f} @ {pr.range_lo:+.1f} st")
+    if bits:
+        rows.append("  print: " + " · ".join(bits))
+    return rows or ["  neutral"]
+
+
 def recipe_summary(profile: LookProfile) -> str:
     """The learned recipe as readable grouped text (near-neutral entries omitted)."""
     m = profile.model
@@ -100,6 +130,8 @@ def recipe_summary(profile: LookProfile) -> str:
     if abs(m.global_trim.exposure) > _EPS:
         lines.append(f"Global\n  exposure {m.global_trim.exposure:+.3f} DI "
                      f"(≈ {m.global_trim.exposure / 0.07:+.1f} stops)")
+    lines.append("Film system (negative → print)")
+    lines += _fmt_filmsystem(m.film_system)
     lines.append("Tone curves")
     lines += _fmt_curves(m.curves)
     lines.append("Crosstalk")
