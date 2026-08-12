@@ -1,16 +1,20 @@
 """scale — scale a fitted model's look toward neutral, per group (tone vs colour).
 
-@context  A learned look carries the film's absolute tonal mood (exposure/contrast) AND its
-          palette. On footage unlike the film's frames the mood can be wrong while the
-          palette is right (ADR-0005: dim warm pool -> muddy daylight). Because the model is
-          parametric, "less of the look" is exact: interpolate each parameter toward its
-          neutral value. Tone and colour scale independently.
-@done     scaled_model(model, tone_amount, color_amount).
+@context  A learned look carries the film's tonal mood (exposure/contrast) AND its colour
+          cast. The cast largely lives in how the three tone curves DIFFER from each other
+          (blue crushed vs red lifted = yellow), so the split is by decomposition, not by
+          block: TONE = exposure + the channels' SHARED curve shape (their average);
+          COLOR = each channel's deviation from that shared shape + crosstalk + sat-vs-luma
+          + hue zones. Colour 0 makes all three curves identical — the cast is gone, the
+          contrast stays. (First version grouped whole curves under tone; the user's yellow
+          cast then sat in the wrong dial and Color did nothing visible.)
+@done     scaled_model(model, tone_amount, color_amount) with mean/deviation curve split.
 @todo     -
-@limits   PURE: no IO. Amounts clamp to [0, 1] — interpolation toward neutral is convex, so
-          every fit-bound and monotonicity guarantee survives scaling (overdrive > 1 would
-          break that and is refused). t=c=1 returns an equal model; t=c=0 the identity.
-@affects  Used by apply_tab.py (Tone/Color amount dials — bake + export). ADR-0005.
+@limits   PURE: no IO. Amounts clamp to [0, 1]. Recomposed curve params are clamped to the
+          fit bounds (toe/shoulder >= 0, slope [0.5, 2], pivot [0.3, 0.7]) because the
+          deviation-only mix (tone 0, colour 1) is not a convex combination. t=c=1 returns
+          an equal model; t=c=0 the identity.
+@affects  Used by apply_tab.py (Tone/Color amount dials — bake + export). ADR-0005/0007.
 """
 
 from __future__ import annotations
@@ -24,28 +28,41 @@ from .model import FilmModel
 from .satluma import SatLumaParams
 from .scurve import SCurveParams
 
+# neutral curve params and the fit bounds (recomposition clamps back into them)
+_CURVE_NEUTRAL = {"toe": 0.0, "shoulder": 0.0, "slope": 1.0, "pivot": 0.5}
+_CURVE_LO = {"toe": 0.0, "shoulder": 0.0, "slope": 0.5, "pivot": 0.3}
+_CURVE_HI = {"toe": 2.0, "shoulder": 2.0, "slope": 2.0, "pivot": 0.7}
+
 
 def _lerp(neutral: float, value: float, amount: float) -> float:
     return neutral + (value - neutral) * amount
 
 
+def _split_curves(curves, t: float, c: float):
+    """TONE scales the channels' shared shape (mean curve); COLOR scales each channel's
+    deviation from it: param = neutral + t*(mean - neutral) + c*(channel - mean)."""
+    fields = ("toe", "shoulder", "slope", "pivot")
+    per_ch = [asdict(cv) for cv in curves]
+    mean = {f: sum(d[f] for d in per_ch) / 3.0 for f in fields}
+    out = []
+    for d in per_ch:
+        params = {}
+        for f in fields:
+            v = _CURVE_NEUTRAL[f] + t * (mean[f] - _CURVE_NEUTRAL[f]) + c * (d[f] - mean[f])
+            params[f] = min(_CURVE_HI[f], max(_CURVE_LO[f], v))
+        out.append(SCurveParams(**params))
+    return tuple(out)
+
+
 def scaled_model(model: FilmModel, tone_amount: float = 1.0,
                  color_amount: float = 1.0) -> FilmModel:
-    """The model with its tone group (G exposure + B curves) scaled by ``tone_amount`` and
-    its colour group (A crosstalk + C sat-vs-luma + D hue zones) by ``color_amount``.
-    Amounts are clamped to [0, 1]; 1/1 reproduces the model, 0/0 is the identity."""
+    """The model with its TONE (exposure + shared curve shape) scaled by ``tone_amount``
+    and its COLOR (per-channel curve deviation + crosstalk + sat-vs-luma + hue zones) by
+    ``color_amount``. Amounts clamp to [0, 1]; 1/1 reproduces the model, 0/0 the identity."""
     t = min(1.0, max(0.0, float(tone_amount)))
     c = min(1.0, max(0.0, float(color_amount)))
 
-    curves = tuple(
-        SCurveParams(
-            toe=cv.toe * t,
-            shoulder=cv.shoulder * t,
-            slope=_lerp(1.0, cv.slope, t),
-            pivot=_lerp(0.5, cv.pivot, t),
-        )
-        for cv in model.curves
-    )
+    curves = _split_curves(model.curves, t, c)
     crosstalk = CrosstalkParams(**{k: v * c for k, v in asdict(model.crosstalk).items()})
     sat = model.sat_luma
     sat_luma = SatLumaParams(shadow=_lerp(1.0, sat.shadow, c),
