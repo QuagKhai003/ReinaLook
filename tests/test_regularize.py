@@ -6,7 +6,12 @@ import numpy as np
 
 from lutgen.engine.base import load_base
 from lutgen.engine.grid import flatten_lattice, identity_grid, reshape_to_lattice
-from lutgen.engine.regularize import clamp, enforce_neutral_monotonic, gamut_clamp, regularize
+from lutgen.engine.regularize import (
+    clamp,
+    enforce_neutral_monotonic,
+    gamut_clamp,
+    regularize,
+)
 
 _W = np.array([0.2126, 0.7152, 0.0722])
 

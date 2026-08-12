@@ -10,9 +10,9 @@ import pytest
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6 import QtWidgets  # noqa: E402
+from PySide6 import QtWidgets
 
-from lutgen.engine.cube_io import read_cube  # noqa: E402
+from lutgen.engine.cube_io import read_cube
 
 
 @pytest.fixture(scope="module")

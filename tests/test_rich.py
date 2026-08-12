@@ -6,7 +6,6 @@ import numpy as np
 from PIL import Image
 
 from lutgen.engine.base import load_base
-from lutgen.engine.strength import blend
 from lutgen.fitter.interface import LookFitter
 from lutgen.fitter.rich import RichFitter
 from lutgen.orchestration.consensus import build_consensus
