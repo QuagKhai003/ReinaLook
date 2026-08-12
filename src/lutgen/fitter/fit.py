@@ -58,7 +58,7 @@ from lutgen.orchestration.poolstats import (
 ProgressFn = Callable[[str], None]
 
 # Stage names (also what the progress callback receives, spec §9 "Fitting tone…").
-STAGES = ("tone", "crosstalk", "huesat")
+STAGES = ("tone", "crosstalk", "huesat", "polish")
 
 
 @dataclass
@@ -228,7 +228,7 @@ def _conf(w: np.ndarray, w0: float) -> np.ndarray:
 
 def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
                *, tone: bool, balance: bool, chroma: bool, zones: bool,
-               tone_weight: float | None = None) -> np.ndarray:
+               hue_luma: bool = False, tone_weight: float | None = None) -> np.ndarray:
     s = compute_frame_stats(out_display)
     parts = []
     if tone:
@@ -249,6 +249,15 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
         rs = ref.sat_by_band / max(float(w @ ref.sat_by_band), 1e-9)
         ss = s.sat_by_band / max(float(w @ s.sat_by_band), 1e-9)
         parts.append(opt.chroma_weight * c * (ss - rs))
+    if hue_luma:
+        # per-hue LUMINANCE, relative to each side's overall mean L (level-free): how bright
+        # the film renders each colour family — the lush-vs-olive greens axis. Fitted in
+        # stages 1-2: curves/crosstalk are the only blocks that can move a hue's brightness
+        # (stage 3's sat/hue blocks preserve L by construction).
+        ch = _conf(ref.hue_weight, opt.w0)
+        rl = ref.hue_mean_l / max(ref.mean_lab[0], 0.05)
+        sl_ = s.hue_mean_l / max(s.mean_lab[0], 0.05)
+        parts.append(1.0 * ch * (sl_ - rl))
     if zones:
         # fine 12-bin hue targets (ADR-0007), compared in HUE-ANGLE and CHROMA-RATIO units —
         # raw a/b differences scale with chroma (~0.05) and drown under the ridge; angle and
@@ -360,6 +369,29 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
          "tone_weight": opt.tone_anchor_weight},
     )
     sat_luma, hue_fourier = _cd_from_vec(cd_v)
+
+    # Stage 4 — polish (per-hue LUMINANCE): with the hue field settled, re-fit tone+crosstalk
+    # against the hue-luma targets ("lush vs olive greens") — the only blocks that can move a
+    # hue family's brightness. Anchored at the stage-1/2 solution, so this refines rather
+    # than re-opens the tone fit.
+    p0 = np.concatenate([tone_v, ct_v])
+    p_lo = np.concatenate([_TONE_LO, _CT_LO])
+    p_hi = np.concatenate([_TONE_HI, _CT_HI])
+    p_ridge = np.concatenate([np.full(13, 0.3), np.full(6, 0.3)])
+
+    def _polish_model(v):
+        gt, cv = _tone_from_vec(v[:13])
+        return FilmModel(global_trim=gt, crosstalk=_ct_from_vec(v[13:]), curves=cv,
+                         sat_luma=sat_luma, hue_fourier=hue_fourier)
+
+    pol_v = run_stage(
+        "polish", p0, p_lo, p_hi, p_ridge, p0,
+        _polish_model,
+        {"tone": True, "balance": True, "chroma": False, "zones": False, "hue_luma": True,
+         "tone_weight": opt.tone_anchor_weight},
+    )
+    global_trim, curves = _tone_from_vec(pol_v[:13])
+    crosstalk = _ct_from_vec(pol_v[13:])
 
     result.model = FilmModel(global_trim=global_trim, crosstalk=crosstalk, curves=curves,
                              sat_luma=sat_luma, hue_fourier=hue_fourier)

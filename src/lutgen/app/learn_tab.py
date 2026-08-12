@@ -29,9 +29,10 @@ from .worker import Cancelled, ComputeThread
 
 _IMG_FILTER = ("Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);; All files (*)")
 # stage -> progress % shown while that stage runs
-_STAGE_PCT = {"tone": 10, "crosstalk": 45, "huesat": 75, "done": 100}
+_STAGE_PCT = {"tone": 10, "crosstalk": 40, "huesat": 65, "polish": 88, "done": 100}
 _STAGE_TEXT = {"tone": "Fitting tone…", "crosstalk": "Fitting crosstalk…",
-               "huesat": "Fitting hue/sat detail…", "done": "Done"}
+               "huesat": "Fitting hue/sat detail…", "polish": "Polishing hue brightness…",
+               "done": "Done"}
 
 
 def _hint_color(n: int) -> str:

@@ -63,6 +63,8 @@ class FrameStats:
     hue_weight: np.ndarray          # (N_HUE_BINS,) chromatic-pixel share per bin
     hue2_mean_ab: np.ndarray        # (2, N_HUE_BINS, 2) the same, split dark/bright (Block E)
     hue2_weight: np.ndarray         # (2, N_HUE_BINS)
+    hue_mean_l: np.ndarray          # (N_HUE_BINS,) mean L per hue bin — how BRIGHT the film
+                                    # renders each colour family (lush vs olive greens)
     black_point: float              # Oklab L p1
     white_point: float              # Oklab L p99
 
@@ -88,6 +90,7 @@ class PooledTargets:
     hue_weight: np.ndarray
     hue2_mean_ab: np.ndarray
     hue2_weight: np.ndarray
+    hue_mean_l: np.ndarray
     black_point: float
     white_point: float
     n_frames: int
@@ -135,6 +138,7 @@ def compute_frame_stats(image: np.ndarray) -> FrameStats:
     hue_weight = np.zeros(N_HUE_BINS)
     hue2_mean_ab = np.zeros((2, N_HUE_BINS, 2))
     hue2_weight = np.zeros((2, N_HUE_BINS))
+    hue_mean_l = np.zeros(N_HUE_BINS)
     if chromatic.any():
         hue = np.arctan2(lab[chromatic, 2], lab[chromatic, 1])
         zidx = _zone_index(hue)
@@ -155,10 +159,12 @@ def compute_frame_stats(image: np.ndarray) -> FrameStats:
         safe = np.maximum(mass, 1e-9)[:, None]
         hue_mean_ab = (w.T @ ab) / safe
         hue_mean_ab[mass < 1e-9] = 0.0
+        l_chromatic = luma[chromatic]
+        hue_mean_l = (w.T @ l_chromatic) / np.maximum(mass, 1e-9)
+        hue_mean_l[mass < 1e-9] = 0.0
         # Block E targets: the same fine hue bins split into dark/bright halves — soft in
         # BOTH axes (luma ramp 0.4..0.6) so the statistics stay smooth in the parameters
-        l_ch = luma[chromatic]
-        w_lo = np.clip((0.6 - l_ch) / 0.2, 0.0, 1.0)[:, None]
+        w_lo = np.clip((0.6 - l_chromatic) / 0.2, 0.0, 1.0)[:, None]
         for h, wl in enumerate((w_lo, 1.0 - w_lo)):
             wh = w * wl
             m2 = wh.sum(axis=0)
@@ -180,6 +186,7 @@ def compute_frame_stats(image: np.ndarray) -> FrameStats:
         hue_weight=hue_weight,
         hue2_mean_ab=hue2_mean_ab,
         hue2_weight=hue2_weight,
+        hue_mean_l=hue_mean_l,
         black_point=float(np.quantile(luma, 0.01)),
         white_point=float(np.quantile(luma, 0.99)),
     )
@@ -209,6 +216,7 @@ def pool_stats(frames: list[FrameStats]) -> PooledTargets:
         hue_weight=mean("hue_weight"),
         hue2_mean_ab=med("hue2_mean_ab"),
         hue2_weight=mean("hue2_weight"),
+        hue_mean_l=med("hue_mean_l"),
         black_point=float(np.median([f.black_point for f in frames])),
         white_point=float(np.median([f.white_point for f in frames])),
         n_frames=len(frames),
@@ -246,6 +254,7 @@ def neutral_prior() -> PooledTargets:
         hue2_mean_ab=np.tile(0.06 * np.column_stack([np.cos(HUE_BIN_CENTERS),
                                                      np.sin(HUE_BIN_CENTERS)]), (2, 1, 1)),
         hue2_weight=np.full((2, N_HUE_BINS), 0.5 / N_HUE_BINS),
+        hue_mean_l=np.full(N_HUE_BINS, 0.45),
         black_point=0.02,
         white_point=0.95,
         n_frames=0,
