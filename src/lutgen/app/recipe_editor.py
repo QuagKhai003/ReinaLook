@@ -44,6 +44,7 @@ def _curve_rows(ch: str) -> list:
     ]
 
 
+_SPEC += [("Global", ("global", "exposure"), "Exposure (DI offset)", -0.3, 0.3, 0.005, _ID)]
 for _ch in ("r", "g", "b"):
     _SPEC += _curve_rows(_ch)
 _SPEC += [

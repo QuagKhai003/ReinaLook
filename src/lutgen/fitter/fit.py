@@ -38,6 +38,7 @@ from lutgen.engine.perceptual import from_oklab, to_oklab
 from lutgen.fitter.filmmodel import (
     CrosstalkParams,
     FilmModel,
+    GlobalParams,
     HueZoneParams,
     SatLumaParams,
     SCurveParams,
@@ -74,9 +75,12 @@ class FitOptions:
     tone_anchor_weight: float = 0.3   # stage 2/3: soft anchor keeping stage-1 tone in place
     max_nfev: int | None = None       # per stage; None = scipy default
     diff_step: float = 1e-3           # finite-difference step (quantile stats are piecewise)
-    exposure_align: bool = True       # prior path only: match the assumed world's exposure to
-                                      # the pool's (scene brightness is content, not grade —
-                                      # ADR-0003; a real user source pool is never rescaled)
+    exposure_align: bool = False      # prior path only. OFF (default): the full look — incl.
+                                      # its tonal mood — is learned against the spec's normal
+                                      # world; Block G's exposure param makes the level
+                                      # expressible (the ADR-0003 bound-slam is gone). ON:
+                                      # colour-science-only recipe (source adopts the pool's
+                                      # tone distribution) — kept as a future product knob.
 
 
 @dataclass
@@ -157,9 +161,10 @@ def _cube_fn(samples: np.ndarray, size: int):
 
 # ── parameter vectors per stage ───────────────────────────────────────
 
-_TONE_NEUTRAL = np.array([0.0, 0.0, 1.0, 0.5] * 3)               # (toe, shoulder, slope, pivot) x RGB
-_TONE_LO = np.array([0.0, 0.0, 0.5, 0.3] * 3)
-_TONE_HI = np.array([2.0, 2.0, 2.0, 0.7] * 3)
+# tone stage vector: global exposure (Block G) + (toe, shoulder, slope, pivot) x RGB
+_TONE_NEUTRAL = np.array([0.0] + [0.0, 0.0, 1.0, 0.5] * 3)
+_TONE_LO = np.array([-0.3] + [0.0, 0.0, 0.5, 0.3] * 3)
+_TONE_HI = np.array([0.3] + [2.0, 2.0, 2.0, 0.7] * 3)
 _CT_NEUTRAL = np.zeros(6)
 _CT_LO, _CT_HI = np.full(6, -0.25), np.full(6, 0.25)
 _CD_NEUTRAL = np.array([1.0, 1.0, 1.0] + [0.0] * 12)             # satluma x3, then 6 x (shift, trim)
@@ -167,11 +172,12 @@ _CD_LO = np.array([0.2, 0.2, 0.2] + [-0.35, -0.5] * 6)
 _CD_HI = np.array([2.0, 2.0, 2.0] + [0.35, 0.5] * 6)
 
 
-def _tone_from_vec(v: np.ndarray) -> tuple[SCurveParams, SCurveParams, SCurveParams]:
-    return tuple(
+def _tone_from_vec(v: np.ndarray) -> tuple[GlobalParams, tuple[SCurveParams, SCurveParams, SCurveParams]]:
+    curves = tuple(
         SCurveParams(toe=v[i], shoulder=v[i + 1], slope=v[i + 2], pivot=v[i + 3])
-        for i in (0, 4, 8)
+        for i in (1, 5, 9)
     )
+    return GlobalParams(exposure=v[0]), curves
 
 
 def _ct_from_vec(v: np.ndarray) -> CrosstalkParams:
@@ -252,34 +258,34 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
         result.stage_nfev[name] = int(sol.nfev)
         return sol.x
 
-    # Stage 1 — tone curves (Block B). Determined by the most abundant statistic.
+    # Stage 1 — global exposure + tone curves (Blocks G+B). The most abundant statistic.
     tone_v = run_stage(
         "tone", _TONE_NEUTRAL, _TONE_LO, _TONE_HI, opt.ridge_tone, _TONE_NEUTRAL,
-        lambda v: FilmModel(curves=_tone_from_vec(v)),
+        lambda v: FilmModel(global_trim=_tone_from_vec(v)[0], curves=_tone_from_vec(v)[1]),
         {"tone": True, "balance": True, "chroma": False, "zones": False},
     )
-    curves = _tone_from_vec(tone_v)
+    global_trim, curves = _tone_from_vec(tone_v)
 
     # Stage 2 — crosstalk (Block A). Tone frozen; quantiles stay as a soft anchor.
     ct_v = run_stage(
         "crosstalk", _CT_NEUTRAL, _CT_LO, _CT_HI, opt.ridge_crosstalk, _CT_NEUTRAL,
-        lambda v: FilmModel(crosstalk=_ct_from_vec(v), curves=curves),
+        lambda v: FilmModel(global_trim=global_trim, crosstalk=_ct_from_vec(v), curves=curves),
         {"tone": True, "balance": True, "chroma": False, "zones": True,
          "tone_weight": opt.tone_anchor_weight},
     )
     crosstalk = _ct_from_vec(ct_v)
 
-    # Stage 3 — saturation & hue detail (Blocks C/D). A and B frozen.
+    # Stage 3 — saturation & hue detail (Blocks C/D). G, A and B frozen.
     cd_v = run_stage(
         "huesat", _CD_NEUTRAL, _CD_LO, _CD_HI, opt.ridge_huesat, _CD_NEUTRAL,
-        lambda v: FilmModel(crosstalk=crosstalk, curves=curves,
+        lambda v: FilmModel(global_trim=global_trim, crosstalk=crosstalk, curves=curves,
                             sat_luma=_cd_from_vec(v)[0], hue_zones=_cd_from_vec(v)[1]),
         {"tone": True, "balance": True, "chroma": True, "zones": True,
          "tone_weight": opt.tone_anchor_weight},
     )
     sat_luma, hue_zones = _cd_from_vec(cd_v)
 
-    result.model = FilmModel(crosstalk=crosstalk, curves=curves,
+    result.model = FilmModel(global_trim=global_trim, crosstalk=crosstalk, curves=curves,
                              sat_luma=sat_luma, hue_zones=hue_zones)
     if progress:
         progress("done")

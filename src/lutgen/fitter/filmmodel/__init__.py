@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from .crosstalk import CrosstalkParams, apply_crosstalk, crosstalk_matrix
+from .globaltrim import GlobalParams, apply_global
 from .huezone import HueZoneParams, apply_hue_zones
 from .model import FilmModel
 from .satluma import SatLumaParams, apply_sat_luma, sat_multiplier
@@ -23,10 +24,12 @@ from .scurve import SCurveParams, apply_scurve
 __all__ = [
     "CrosstalkParams",
     "FilmModel",
+    "GlobalParams",
     "HueZoneParams",
     "SCurveParams",
     "SatLumaParams",
     "apply_crosstalk",
+    "apply_global",
     "apply_hue_zones",
     "apply_sat_luma",
     "apply_scurve",
