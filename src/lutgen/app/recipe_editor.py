@@ -53,7 +53,7 @@ _SPEC += [
                    ("gb", "G → B"), ("br", "B → R"), ("bg", "B → G"))
 ]
 _SPEC += [
-    ("Saturation vs luminance", ("sat_luma", k), lbl, 0.4, 1.7, 0.01, _ID)
+    ("Saturation vs luminance", ("sat_luma", k), lbl, 0.7, 1.3, 0.01, _ID)
     for k, lbl in (("shadow", "Shadow ×"), ("mid", "Mid ×"), ("high", "Highlight ×"))
 ]
 for _z in ("r", "y", "g", "c", "b", "m"):

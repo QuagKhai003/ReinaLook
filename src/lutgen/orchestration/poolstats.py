@@ -232,8 +232,11 @@ def neutral_prior() -> PooledTargets:
     return PooledTargets(
         channel_quantiles=np.tile(ramp, (3, 1)),
         mean_lab=np.array([0.45, 0.0, 0.0]),
-        chroma_by_band=np.array([0.03, 0.05, 0.06, 0.05, 0.035]),
-        sat_by_band=np.array([0.03, 0.05, 0.06, 0.05, 0.035]) / np.array([0.1, 0.3, 0.5, 0.7, 0.9]),
+        # a CONSTANT-SATURATION world (C/L ≈ 0.13 — the level real pools measure through
+        # shadows and mids): the earlier flat-chroma prior implied sat 0.30 in shadows,
+        # a phantom the fit chased by cutting the look's saturation ~35% (ADR-0007)
+        chroma_by_band=0.13 * np.array([0.1, 0.3, 0.5, 0.7, 0.9]),
+        sat_by_band=np.full(N_BANDS, 0.13),
         band_mean_ab=np.zeros((N_BANDS, 2)),   # gray world at every brightness
         band_weight=np.full(N_BANDS, 1.0 / N_BANDS),
         zone_mean_ab=0.06 * zone_dirs,
