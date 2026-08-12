@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from .crosstalk import CrosstalkParams
+from .fourierhue import FourierHueParams
 from .globaltrim import GlobalParams
 from .huezone import HueZoneParams
 from .model import FilmModel
@@ -69,10 +70,12 @@ def scaled_model(model: FilmModel, tone_amount: float = 1.0,
                              mid=_lerp(1.0, sat.mid, c),
                              high=_lerp(1.0, sat.high, c))
     hue_zones = HueZoneParams(**{k: v * c for k, v in asdict(model.hue_zones).items()})
+    hue_fourier = FourierHueParams(**{k: v * c for k, v in asdict(model.hue_fourier).items()})
     return FilmModel(
         global_trim=GlobalParams(exposure=model.global_trim.exposure * t),
         crosstalk=crosstalk,
         curves=curves,
         sat_luma=sat_luma,
         hue_zones=hue_zones,
+        hue_fourier=hue_fourier,
     )

@@ -95,6 +95,9 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="node2: replace Node 2; between: DWG/DI look between Node 1&2")
     ap.add_argument("--out", "-o", required=True, help="output .cube path")
     ap.add_argument("--title", default=None, help="cube TITLE (default: profile name)")
+    ap.add_argument("--film-brightness", action="store_true",
+                    help="also bake the film's absolute brightness (exposure) into the cube; "
+                         "default keeps your footage's own exposure")
     ap.add_argument("--force", action="store_true",
                     help="export even if stress validation fails (not recommended)")
     return parser
@@ -171,7 +174,9 @@ def _cmd_learn(args: argparse.Namespace) -> int:
     from lutgen.orchestration.profile import save_profile
 
     print(frame_count_hint(len(args.refs)))
-    options = FitOptions(n_samples=1200, max_nfev=30) if args.fast else None
+    options = (FitOptions(n_samples=1200, max_nfev=30, ridge_huesat=0.25)  # draft:
+               # stiff colour ridge — small clouds make wiggly hue curves
+               if args.fast else None)
     profile = learn_profile(
         args.refs,
         name=args.name or Path(args.out).stem,
@@ -179,6 +184,8 @@ def _cmd_learn(args: argparse.Namespace) -> int:
         options=options,
         progress=lambda stage: print(f"fitting: {stage}"),
     )
+    if profile.grouping_note:
+        print(f"note: {profile.grouping_note}")
     save_profile(args.out, profile)
     cost = ", ".join(f"{k} {v:.4g}" for k, v in profile.stage_cost.items())
     print(f"wrote {args.out}  (learned from {profile.n_frames} frames; fit cost: {cost})")
@@ -194,13 +201,19 @@ def _cmd_apply(args: argparse.Namespace) -> int:
     from lutgen.orchestration.profile import load_profile
 
     profile = load_profile(args.profile)
-    cube = render_cube_from_profile(profile, args.strength,
+    model = profile.model
+    if not args.film_brightness:                 # brightness is content unless opted in
+        from dataclasses import replace as _dc_replace
+
+        from lutgen.fitter.filmmodel import GlobalParams
+        model = _dc_replace(model, global_trim=GlobalParams())
+    cube = render_cube_from_profile(model, args.strength,
                                     title=args.title or profile.name, placement=args.placement)
 
     report = validate_baked_cube(cube, args.placement)   # spec §6: mandatory before export
     if not report.ok:
         print("stress validation FAILED:", file=sys.stderr)
-        blamed = diagnose_model(profile.model, args.strength, placement=args.placement)
+        blamed = diagnose_model(model, args.strength, placement=args.placement)
         for block, problems in blamed.items():
             for p in problems:
                 print(f"  {block}: {p}", file=sys.stderr)

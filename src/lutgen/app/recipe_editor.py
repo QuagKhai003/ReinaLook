@@ -53,14 +53,21 @@ _SPEC += [
                    ("gb", "G → B"), ("br", "B → R"), ("bg", "B → G"))
 ]
 _SPEC += [
-    ("Saturation vs luminance", ("sat_luma", k), lbl, 0.2, 2.0, 0.01, _ID)
+    ("Saturation vs luminance", ("sat_luma", k), lbl, 0.7, 1.3, 0.01, _ID)
     for k, lbl in (("shadow", "Shadow ×"), ("mid", "Mid ×"), ("high", "Highlight ×"))
 ]
 for _z in ("r", "y", "g", "c", "b", "m"):
     _SPEC += [
-        ("Hue zones", ("hue_zones", f"{_z}_shift"), f"{_z.upper()} hue °", -20.0, 20.0, 0.5, _DEG),
-        ("Hue zones", ("hue_zones", f"{_z}_trim"), f"{_z.upper()} sat %", -50.0, 50.0, 1.0, _PCT),
+        ("Hue zones (legacy)", ("hue_zones", f"{_z}_shift"), f"{_z.upper()} hue °", -20.0, 20.0, 0.5, _DEG),
+        ("Hue zones (legacy)", ("hue_zones", f"{_z}_trim"), f"{_z.upper()} sat %", -50.0, 50.0, 1.0, _PCT),
     ]
+# v2.1 Fourier hue curve coefficients (power-user; shift in radians, trim as fraction)
+for _cf in ("s0", "sc1", "sc2", "sc3", "sc4", "ss1", "ss2", "ss3", "ss4"):
+    _SPEC += [("Hue curve — shift coefs", ("hue_fourier", _cf), _cf, -0.12, 0.12, 0.005, _ID)]
+for _cf in ("t0", "tc1", "tc2", "tc3", "tc4", "ts1", "ts2", "ts3", "ts4"):
+    _SPEC += [("Hue curve — sat coefs", ("hue_fourier", _cf), _cf, -0.25, 0.25, 0.005, _ID)]
+for _cf in ("l0", "lc1", "lc2", "ls1", "ls2"):
+    _SPEC += [("Hue curve — brightness mod", ("hue_fourier", _cf), _cf, -0.2, 0.2, 0.005, _ID)]
 
 
 def _get(d: dict, path: tuple[str, ...]) -> float:

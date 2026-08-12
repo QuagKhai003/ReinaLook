@@ -29,9 +29,10 @@ from .worker import Cancelled, ComputeThread
 
 _IMG_FILTER = ("Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);; All files (*)")
 # stage -> progress % shown while that stage runs
-_STAGE_PCT = {"tone": 10, "crosstalk": 45, "huesat": 75, "done": 100}
+_STAGE_PCT = {"tone": 10, "crosstalk": 40, "huesat": 65, "polish": 88, "done": 100}
 _STAGE_TEXT = {"tone": "Fitting tone…", "crosstalk": "Fitting crosstalk…",
-               "huesat": "Fitting hue/sat detail…", "done": "Done"}
+               "huesat": "Fitting hue/sat detail…", "polish": "Polishing hue brightness…",
+               "done": "Done"}
 
 
 def _hint_color(n: int) -> str:
@@ -93,7 +94,9 @@ class LearnTab(QtWidgets.QWidget):
         self._save_btn.clicked.connect(self._save)
 
         lay = QtWidgets.QVBoxLayout(self)
-        lay.addWidget(QtWidgets.QLabel("GRADED reference frames (varied scenes, same look)"))
+        lay.addWidget(QtWidgets.QLabel("GRADED reference frames — varied scenes, SAME "
+                                       "lighting mood (mixing day + night frames blends "
+                                       "two looks into neither)"))
         lay.addWidget(self._list, 1)
         lay.addWidget(add_btn)
         lay.addWidget(rm_btn)
@@ -143,7 +146,8 @@ class LearnTab(QtWidgets.QWidget):
         if not self._paths or (self._thread is not None and self._thread.isRunning()):
             return
         paths = list(self._paths)
-        options = FitOptions(n_samples=1200, max_nfev=30) if self._fast.isChecked() else None
+        options = (FitOptions(n_samples=1200, max_nfev=30, ridge_huesat=0.25)
+                   if self._fast.isChecked() else None)
         self._cancel = False
         self._set_running(True)
 
@@ -197,7 +201,10 @@ class LearnTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not learn the look:\n{result}")
             return
         self._profile = result
-        self._summary.setPlainText(recipe_summary(result))
+        text = recipe_summary(result)
+        if result.grouping_note:
+            text = "NOTE: " + result.grouping_note + "\n\n" + text
+        self._summary.setPlainText(text)
         self._save_btn.setEnabled(True)
 
     # — save —

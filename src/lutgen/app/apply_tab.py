@@ -109,6 +109,13 @@ class ApplyTab(QtWidgets.QWidget):
         self._strength.valueChanged.connect(self._on_strength)
         self._strength_lbl = QtWidgets.QLabel("Strength: 1.00")
 
+        # ADR-0007: the film's absolute brightness is CONTENT (night scenes drag the pool
+        # dark) — not baked unless the user opts in. Default OFF keeps the footage's own
+        # exposure; the recipe still stores the fitted value for those who want it.
+        self._bake_exposure = QtWidgets.QCheckBox("Bake film brightness (exposure)")
+        self._bake_exposure.setChecked(False)
+        self._bake_exposure.toggled.connect(self._on_amounts)
+
         # ADR-0005: scale the RECIPE toward neutral, per group — keep the film's palette
         # while relaxing its tonal mood (or vice versa). Re-bakes debounced; export uses
         # the scaled model. Save-as always saves the editor's model UNscaled.
@@ -164,6 +171,7 @@ class ApplyTab(QtWidgets.QWidget):
         form = QtWidgets.QFormLayout()
         form.addRow("Placement", self._placement)
         controls.addLayout(form)
+        controls.addWidget(self._bake_exposure)
         controls.addWidget(self._tone_amt_lbl)
         controls.addWidget(self._tone_amt)
         controls.addWidget(self._color_amt_lbl)
@@ -285,10 +293,15 @@ class ApplyTab(QtWidgets.QWidget):
         return "between" if self._placement.currentIndex() == 1 else "node2"
 
     def _effective_model(self):
-        """The editor's model scaled by the Tone/Color amount dials (bake + export path)."""
-        return scaled_model(self._profile.model,
-                            self._tone_amt.value() / 100.0,
-                            self._color_amt.value() / 100.0)
+        """The editor's model scaled by the Tone/Color amount dials (bake + export path).
+        Film brightness (Block G exposure) applies only when explicitly opted in."""
+        m = scaled_model(self._profile.model,
+                         self._tone_amt.value() / 100.0,
+                         self._color_amt.value() / 100.0)
+        if not self._bake_exposure.isChecked():
+            from lutgen.fitter.filmmodel import GlobalParams
+            m.global_trim = GlobalParams()
+        return m
 
     def _on_amounts(self, _=None) -> None:
         self._tone_amt_lbl.setText(

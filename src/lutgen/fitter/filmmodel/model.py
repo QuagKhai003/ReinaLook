@@ -2,8 +2,8 @@
 
 @context  The single pointwise transform the fitter solves for. Fixed pipeline order (spec §3):
           input (DWG/DI) -> [G] global exposure -> [A] crosstalk -> [B] per-channel S-curves
-          -> [C] sat-vs-luma (Oklab) -> [D] hue-zone trims (Oklab) -> output (DWG/DI).
-          ~34 params (G:1 + A:6 + B:12 + C:3 + D:12).
+          -> [C] sat-vs-luma (Oklab) -> [D] hue trims (Oklab: legacy zones + v2.1 Fourier
+          curve) -> output (DWG/DI). ~52 params (G:1 + A:6 + B:12 + C:3 + D:12+18).
 @done     FilmModel(crosstalk, curves, sat_luma, hue_zones, global_trim).forward; identity();
           is_identity().
 @todo     Block E hue x luma grid (v2.1, Phase 3).
@@ -29,6 +29,7 @@ import numpy as np
 from lutgen.engine.perceptual import from_oklab, to_oklab
 
 from .crosstalk import CrosstalkParams, apply_crosstalk
+from .fourierhue import FourierHueParams, apply_fourier_hue
 from .globaltrim import GlobalParams, apply_global
 from .huezone import HueZoneParams, apply_hue_zones
 from .satluma import SatLumaParams, apply_sat_luma
@@ -53,6 +54,7 @@ class FilmModel:
     sat_luma: SatLumaParams = field(default_factory=SatLumaParams)
     hue_zones: HueZoneParams = field(default_factory=HueZoneParams)
     global_trim: GlobalParams = field(default_factory=GlobalParams)
+    hue_fourier: FourierHueParams = field(default_factory=FourierHueParams)
 
     @classmethod
     def identity(cls) -> FilmModel:
@@ -66,6 +68,7 @@ class FilmModel:
             and all(c.is_identity() for c in self.curves)
             and self.sat_luma.is_identity()
             and self.hue_zones.is_identity()
+            and self.hue_fourier.is_identity()
         )
 
     def forward(self, rgb: np.ndarray) -> np.ndarray:
@@ -80,9 +83,11 @@ class FilmModel:
         x = apply_global(rgb, self.global_trim)           # Block G (exposure, log offset)
         x = apply_crosstalk(x, self.crosstalk)            # Block A
         x = apply_scurve(x, self.curves)                  # Block B
-        if not (self.sat_luma.is_identity() and self.hue_zones.is_identity()):
+        if not (self.sat_luma.is_identity() and self.hue_zones.is_identity()
+                and self.hue_fourier.is_identity()):
             lab = to_oklab(x)                             # code-space Oklab (bounded, sane)
             lab = apply_sat_luma(lab, self.sat_luma)      # Block C
-            lab = apply_hue_zones(lab, self.hue_zones)    # Block D
+            lab = apply_hue_zones(lab, self.hue_zones)    # Block D (legacy zones, old profiles)
+            lab = apply_fourier_hue(lab, self.hue_fourier)  # Block D v2 (smooth, new fits)
             x = from_oklab(lab)
         return x

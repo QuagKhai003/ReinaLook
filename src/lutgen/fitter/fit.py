@@ -41,13 +41,13 @@ from lutgen.engine.perceptual import from_oklab, to_oklab
 from lutgen.fitter.filmmodel import (
     CrosstalkParams,
     FilmModel,
+    FourierHueParams,
     GlobalParams,
-    HueZoneParams,
     SatLumaParams,
     SCurveParams,
 )
-from lutgen.fitter.filmmodel.huezone import ZONE_ANGLES
 from lutgen.orchestration.poolstats import (
+    HUE_BIN_CENTERS,
     L_BAND_EDGES,
     QUANTILES,
     PooledTargets,
@@ -58,7 +58,7 @@ from lutgen.orchestration.poolstats import (
 ProgressFn = Callable[[str], None]
 
 # Stage names (also what the progress callback receives, spec §9 "Fitting tone…").
-STAGES = ("tone", "crosstalk", "huesat")
+STAGES = ("tone", "crosstalk", "huesat", "polish")
 
 
 @dataclass
@@ -70,7 +70,7 @@ class FitOptions:
     w0: float = 0.02             # thin-data knee: conf = sqrt(w/(w+w0))
     ridge_tone: float = 0.05     # pull-to-neutral strength per stage (per-region reg.)
     ridge_crosstalk: float = 0.15
-    ridge_huesat: float = 0.15
+    ridge_huesat: float = 0.05  # loosened in ADR-0007 — the §6 validator is the safety gate
     quantile_weight: float = 1.0
     balance_weight: float = 2.0
     band_balance_weight: float = 3.0  # per-band a/b targets (ADR-0006 A) — the conditional
@@ -81,7 +81,9 @@ class FitOptions:
     zone_weight: float = 1.5
     tone_anchor_weight: float = 0.3   # stage 2/3: soft anchor keeping stage-1 tone in place
     max_nfev: int | None = None       # per stage; None = scipy default
-    diff_step: float = 1e-3           # finite-difference step (quantile stats are piecewise)
+    diff_step: float = 0.02           # finite-difference secant step: statistics of a
+                                      # finite sample cloud carry O(1/n) quantization;
+                                      # a wide secant averages over it (ADR-0007)
     exposure_align: bool = False      # prior path only. OFF (default): the full look — incl.
                                       # its tonal mood — is learned against the spec's normal
                                       # world; Block G's exposure param makes the level
@@ -140,12 +142,16 @@ def synth_samples(targets: PooledTargets, n: int, seed: int = 0) -> np.ndarray:
     band = np.digitize(luma, L_BAND_EDGES)
     chroma = targets.chroma_by_band[band] * rng.uniform(0.4, 1.6, n)
 
-    zone_w = targets.zone_weight.copy()
-    chromatic_share = float(zone_w.sum())
+    # hue from the pool's fine 12-bin distribution + in-bin jitter: CONTINUOUS wheel
+    # coverage (the old 6-zone-cluster sampling left half the hue bins empty, making the
+    # v2.1 Fourier hue curve unidentifiable — ADR-0007)
+    hue_w = targets.hue_weight.copy()
+    chromatic_share = float(hue_w.sum())
+    bin_width = 2.0 * np.pi / len(hue_w)
     if chromatic_share > 0:
-        zone_p = zone_w / chromatic_share
-        zones = rng.choice(len(zone_p), size=n, p=zone_p)
-        hue = ZONE_ANGLES[zones] + rng.uniform(-0.5, 0.5, n)
+        hue_p = hue_w / chromatic_share
+        bins = rng.choice(len(hue_p), size=n, p=hue_p)
+        hue = HUE_BIN_CENTERS[bins] + rng.uniform(-bin_width / 2, bin_width / 2, n)
         achromatic = rng.uniform(0.0, 1.0, n) >= min(1.0, chromatic_share)
         chroma = np.where(achromatic, chroma * 0.05, chroma)
     else:                                   # fully achromatic source
@@ -174,9 +180,18 @@ _TONE_LO = np.array([-0.3] + [0.0, 0.0, 0.5, 0.3] * 3)
 _TONE_HI = np.array([0.3] + [2.0, 2.0, 2.0, 0.7] * 3)
 _CT_NEUTRAL = np.zeros(6)
 _CT_LO, _CT_HI = np.full(6, -0.25), np.full(6, 0.25)
-_CD_NEUTRAL = np.array([1.0, 1.0, 1.0] + [0.0] * 12)             # satluma x3, then 6 x (shift, trim)
-_CD_LO = np.array([0.2, 0.2, 0.2] + [-0.35, -0.5] * 6)
-_CD_HI = np.array([2.0, 2.0, 2.0] + [0.35, 0.5] * 6)
+# satluma x3, then the Fourier hue curve: 9 shift coefs (rad) + 9 trim coefs (ADR-0007;
+# the legacy 6-zone params are no longer fitted — they remain for old profiles only).
+# Spectral decay: order-k coefficients are bounded by base/k, keeping the curve's DERIVATIVE
+# bounded (a steep hue curve compresses hues into delta-E spikes and tone reversals).
+_HARM = np.array([1.0, 1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0])   # k per coef (a0, a1..a4, b1..b4)
+_HARM_L = np.array([1.0, 1.0, 2.0, 1.0, 2.0])                     # Block E: l0, lc1, lc2, ls1, ls2
+_CD_NEUTRAL = np.array([1.0, 1.0, 1.0] + [0.0] * 23)
+# sat-vs-luma bounded to the physically-plausible film range: multipliers near 2x create
+# chroma gradients steep enough to reverse channels on saturated ramps (found by the gate)
+# sat-vs-luma is a gentle RELATIVE shape only (±30%); level is never learned
+_CD_LO = np.concatenate([[0.7, 0.7, 0.7], -0.12 / _HARM, -0.25 / _HARM, -0.2 / _HARM_L])
+_CD_HI = np.concatenate([[1.3, 1.3, 1.3], 0.12 / _HARM, 0.25 / _HARM, 0.2 / _HARM_L])
 
 
 def _tone_from_vec(v: np.ndarray) -> tuple[GlobalParams, tuple[SCurveParams, SCurveParams, SCurveParams]]:
@@ -191,14 +206,17 @@ def _ct_from_vec(v: np.ndarray) -> CrosstalkParams:
     return CrosstalkParams(rg=v[0], rb=v[1], gr=v[2], gb=v[3], br=v[4], bg=v[5])
 
 
-def _cd_from_vec(v: np.ndarray) -> tuple[SatLumaParams, HueZoneParams]:
+def _cd_from_vec(v: np.ndarray) -> tuple[SatLumaParams, FourierHueParams]:
+    # Saturation LEVEL is never learned (ADR-0007): web-still statistics under-measure a
+    # film's perceived vividness (compression + dark grades), so the fit chased dull numbers
+    # and the user's footage lost its colour. Only the RELATIVE saturation behaviour is
+    # learned: sat-vs-luma is normalized to mean 1, and the hue-trim curve's DC term (t0)
+    # is zeroed — hue-to-hue differences survive, the overall level stays the footage's own.
     sl = SatLumaParams(shadow=v[0], mid=v[1], high=v[2])
-    z = v[3:]
-    hz = HueZoneParams(
-        r_shift=z[0], r_trim=z[1], y_shift=z[2], y_trim=z[3], g_shift=z[4], g_trim=z[5],
-        c_shift=z[6], c_trim=z[7], b_shift=z[8], b_trim=z[9], m_shift=z[10], m_trim=z[11],
-    )
-    return sl, hz
+    coefs = dict(zip(FourierHueParams.field_names(), v[3:], strict=True))
+    coefs["t0"] = 0.0                                    # sat level is never learned
+    fh = FourierHueParams(**coefs)
+    return sl, fh
 
 
 # ── residuals ─────────────────────────────────────────────────────────
@@ -209,7 +227,7 @@ def _conf(w: np.ndarray, w0: float) -> np.ndarray:
 
 def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
                *, tone: bool, balance: bool, chroma: bool, zones: bool,
-               tone_weight: float | None = None) -> np.ndarray:
+               hue_luma: bool = False, tone_weight: float | None = None) -> np.ndarray:
     s = compute_frame_stats(out_display)
     parts = []
     if tone:
@@ -222,11 +240,50 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
         parts.append((opt.band_balance_weight * cb *
                       (s.band_mean_ab - ref.band_mean_ab)).ravel())
     if chroma:
+        # Saturation SHAPE only (ADR-0007): both sides normalized by their weighted mean —
+        # the LEVEL is never learned (web stills under-measure vividness). An asymmetric
+        # level residual was trialled and REVERTED: it degraded the verified hue-luminance
+        # result (greens 1.145→0.98 vs ref 1.208) without closing the sat gap.
         c = _conf(ref.band_weight, opt.w0)
-        parts.append(opt.chroma_weight * c * (s.chroma_by_band - ref.chroma_by_band))
+        w = ref.band_weight / max(ref.band_weight.sum(), 1e-9)
+        rs = ref.sat_by_band / max(float(w @ ref.sat_by_band), 1e-9)
+        ss = s.sat_by_band / max(float(w @ s.sat_by_band), 1e-9)
+        parts.append(opt.chroma_weight * c * (ss - rs))
+    if hue_luma:
+        # per-hue LUMINANCE, relative to each side's overall mean L (level-free): how bright
+        # the film renders each colour family — the lush-vs-olive greens axis. Fitted in
+        # stages 1-2: curves/crosstalk are the only blocks that can move a hue's brightness
+        # (stage 3's sat/hue blocks preserve L by construction).
+        ch = _conf(ref.hue_weight, opt.w0)
+        rl = ref.hue_mean_l / max(ref.mean_lab[0], 0.05)
+        sl_ = s.hue_mean_l / max(s.mean_lab[0], 0.05)
+        parts.append(1.0 * ch * (sl_ - rl))
     if zones:
-        c = _conf(ref.zone_weight, opt.w0)[:, None]
-        parts.append((opt.zone_weight * c * (s.zone_mean_ab - ref.zone_mean_ab)).ravel())
+        # fine 12-bin hue targets (ADR-0007), compared in HUE-ANGLE and CHROMA-RATIO units —
+        # raw a/b differences scale with chroma (~0.05) and drown under the ridge; angle and
+        # ratio are unit-compatible with the shift/trim parameters themselves.
+        c = _conf(ref.hue_weight, opt.w0)
+        # magnitudes normalized by each side's mean L: brightness-invariant per-hue vividness
+        mag_r = np.hypot(ref.hue_mean_ab[:, 0], ref.hue_mean_ab[:, 1]) / max(ref.mean_lab[0], 0.05)
+        mag_s = np.hypot(s.hue_mean_ab[:, 0], s.hue_mean_ab[:, 1]) / max(s.mean_lab[0], 0.05)
+        c = c * (mag_r / (mag_r + 0.01))                # near-achromatic bins: angle is noise
+        ang_r = np.arctan2(ref.hue_mean_ab[:, 1], ref.hue_mean_ab[:, 0])
+        ang_s = np.arctan2(s.hue_mean_ab[:, 1], s.hue_mean_ab[:, 0])
+        d_ang = (ang_s - ang_r + np.pi) % (2.0 * np.pi) - np.pi
+        d_mag = (mag_s - mag_r) / np.maximum(mag_r, 0.02)
+        cw = c / max(c.sum(), 1e-9)
+        d_mag = d_mag - float(cw @ d_mag)                 # hue-RELATIVE vividness only
+        parts.append(opt.zone_weight * c * d_ang)
+        parts.append(opt.zone_weight * c * d_mag)
+        # Block E signal: the same comparison per dark/bright half (half weight each)
+        for h in (0, 1):
+            c2 = _conf(ref.hue2_weight[h], opt.w0)
+            m_r = np.hypot(ref.hue2_mean_ab[h, :, 0], ref.hue2_mean_ab[h, :, 1])
+            c2 = c2 * (m_r / (m_r + 0.01))
+            a_r = np.arctan2(ref.hue2_mean_ab[h, :, 1], ref.hue2_mean_ab[h, :, 0])
+            a_s = np.arctan2(s.hue2_mean_ab[h, :, 1], s.hue2_mean_ab[h, :, 0])
+            d2 = (a_s - a_r + np.pi) % (2.0 * np.pi) - np.pi
+            parts.append(opt.zone_weight * c2 * d2)
     return np.concatenate(parts)
 
 
@@ -243,6 +300,11 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
         src_targets = source                      # a real measured pool is never rescaled
     else:
         src_targets = neutral_prior()
+        # the assumed world adopts the POOL's hue-mass structure: constants of the hue curve
+        # (s0, l0 …) are invisible in marginal statistics under a uniform wheel — peaks are
+        # what make them identifiable. Safe now that no mass residual exists to fight the
+        # shift (that combination was tried and removed — see decisions/LOG).
+        src_targets.hue_weight = ref.hue_weight.copy()
         if opt.exposure_align:
             src_targets = _exposure_aligned(src_targets, ref)
 
@@ -284,23 +346,53 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     ct_v = run_stage(
         "crosstalk", _CT_NEUTRAL, _CT_LO, _CT_HI, opt.ridge_crosstalk, _CT_NEUTRAL,
         lambda v: FilmModel(global_trim=global_trim, crosstalk=_ct_from_vec(v), curves=curves),
-        {"tone": True, "balance": True, "chroma": False, "zones": True,
-         "tone_weight": opt.tone_anchor_weight},
+        {"tone": True, "balance": True, "chroma": False, "zones": False,
+         "tone_weight": opt.tone_anchor_weight},  # hue detail belongs to the Fourier stage
+
     )
     crosstalk = _ct_from_vec(ct_v)
 
     # Stage 3 — saturation & hue detail (Blocks C/D). G, A and B frozen.
+    # trim coefficients ridge stiffer than shift (spurious sat wiggle bands on gradients);
+    # higher harmonics ridge ~k^2 — a curvature penalty, the classic smoothness prior
+    cd_ridge = np.concatenate([np.full(3, opt.ridge_huesat * 4.0),  # sat shape: gentle
+                               opt.ridge_huesat * _HARM ** 2,
+                               opt.ridge_huesat * 4.0 * _HARM ** 2,
+                               opt.ridge_huesat * 0.5 * _HARM_L ** 2])  # Block E
     cd_v = run_stage(
-        "huesat", _CD_NEUTRAL, _CD_LO, _CD_HI, opt.ridge_huesat, _CD_NEUTRAL,
+        "huesat", _CD_NEUTRAL, _CD_LO, _CD_HI, cd_ridge, _CD_NEUTRAL,
         lambda v: FilmModel(global_trim=global_trim, crosstalk=crosstalk, curves=curves,
-                            sat_luma=_cd_from_vec(v)[0], hue_zones=_cd_from_vec(v)[1]),
+                            sat_luma=_cd_from_vec(v)[0], hue_fourier=_cd_from_vec(v)[1]),
         {"tone": True, "balance": True, "chroma": True, "zones": True,
          "tone_weight": opt.tone_anchor_weight},
     )
-    sat_luma, hue_zones = _cd_from_vec(cd_v)
+    sat_luma, hue_fourier = _cd_from_vec(cd_v)
+
+    # Stage 4 — polish (per-hue LUMINANCE): with the hue field settled, re-fit tone+crosstalk
+    # against the hue-luma targets ("lush vs olive greens") — the only blocks that can move a
+    # hue family's brightness. Anchored at the stage-1/2 solution, so this refines rather
+    # than re-opens the tone fit.
+    p0 = np.concatenate([tone_v, ct_v])
+    p_lo = np.concatenate([_TONE_LO, _CT_LO])
+    p_hi = np.concatenate([_TONE_HI, _CT_HI])
+    p_ridge = np.concatenate([np.full(13, 0.3), np.full(6, 0.3)])
+
+    def _polish_model(v):
+        gt, cv = _tone_from_vec(v[:13])
+        return FilmModel(global_trim=gt, crosstalk=_ct_from_vec(v[13:]), curves=cv,
+                         sat_luma=sat_luma, hue_fourier=hue_fourier)
+
+    pol_v = run_stage(
+        "polish", p0, p_lo, p_hi, p_ridge, p0,
+        _polish_model,
+        {"tone": True, "balance": True, "chroma": False, "zones": False, "hue_luma": True,
+         "tone_weight": opt.tone_anchor_weight},
+    )
+    global_trim, curves = _tone_from_vec(pol_v[:13])
+    crosstalk = _ct_from_vec(pol_v[13:])
 
     result.model = FilmModel(global_trim=global_trim, crosstalk=crosstalk, curves=curves,
-                             sat_luma=sat_luma, hue_zones=hue_zones)
+                             sat_luma=sat_luma, hue_fourier=hue_fourier)
     if progress:
         progress("done")
     return result
