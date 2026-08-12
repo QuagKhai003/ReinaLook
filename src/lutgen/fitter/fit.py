@@ -13,7 +13,10 @@
           matched to the pool's so tone curves learn SHAPE; real source pools never rescaled).
 @todo     Global exposure/black trims (spec budget) if acceptance shows they're needed.
           Outlier frame down-weighting (poolstats @todo) — evaluate on real pools.
-@limits   PURE numeric: no file IO beyond the bundled base assets via engine/base (allowed by
+@limits   Conditional colour (ADR-0006): band_mean_ab residuals in every stage teach the
+          "shadows cool / highlights warm" behaviour; exposure carries its own strong ridge
+          so uniform darkening only wins when nothing conditional explains the data.
+          PURE numeric: no file IO beyond the bundled base assets via engine/base (allowed by
           the Golden Rule). Deterministic: seeded cloud + trf least squares. Per-region
           regularization: thin bins (low band/zone weight) get their target residuals damped
           by conf = sqrt(w/(w+w0)) AND every param carries a ridge pull to neutral — unused
@@ -70,6 +73,10 @@ class FitOptions:
     ridge_huesat: float = 0.15
     quantile_weight: float = 1.0
     balance_weight: float = 2.0
+    band_balance_weight: float = 3.0  # per-band a/b targets (ADR-0006 A) — the conditional
+                                      # "shadows cool / highlights warm" signal, every stage
+    ridge_exposure: float = 0.4       # ADR-0006 C: plain global darkening must cost more than
+                                      # the conditional explanation
     chroma_weight: float = 2.0
     zone_weight: float = 1.5
     tone_anchor_weight: float = 0.3   # stage 2/3: soft anchor keeping stage-1 tone in place
@@ -210,6 +217,10 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
         parts.append(tw * (s.channel_quantiles - ref.channel_quantiles).ravel())
     if balance:
         parts.append(opt.balance_weight * (s.mean_lab - ref.mean_lab))
+        # conditional balance (ADR-0006 A): colour per luminance band, conf-damped for thin bands
+        cb = _conf(ref.band_weight, opt.w0)[:, None]
+        parts.append((opt.band_balance_weight * cb *
+                      (s.band_mean_ab - ref.band_mean_ab)).ravel())
     if chroma:
         c = _conf(ref.band_weight, opt.w0)
         parts.append(opt.chroma_weight * c * (s.chroma_by_band - ref.chroma_by_band))
@@ -245,11 +256,12 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     def run_stage(name, x0, lo, hi, ridge, neutral, model_of, res_kw):
         if progress:
             progress(name)
+        ridge_v = np.sqrt(np.broadcast_to(np.asarray(ridge, dtype=np.float64), x0.shape))
 
         def f(v):
             out = fwd(model_of(v).forward(di_cloud))
             data = _residuals(out, ref, opt, **res_kw)
-            reg = np.sqrt(ridge) * (v - neutral)
+            reg = ridge_v * (v - neutral)
             return np.concatenate([data, reg])
 
         sol = least_squares(f, x0, bounds=(lo, hi), method="trf",
@@ -259,8 +271,10 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
         return sol.x
 
     # Stage 1 — global exposure + tone curves (Blocks G+B). The most abundant statistic.
+    tone_ridge = np.full(_TONE_NEUTRAL.shape, opt.ridge_tone)
+    tone_ridge[0] = opt.ridge_exposure                 # ADR-0006 C: the lazy global darkening
     tone_v = run_stage(
-        "tone", _TONE_NEUTRAL, _TONE_LO, _TONE_HI, opt.ridge_tone, _TONE_NEUTRAL,
+        "tone", _TONE_NEUTRAL, _TONE_LO, _TONE_HI, tone_ridge, _TONE_NEUTRAL,
         lambda v: FilmModel(global_trim=_tone_from_vec(v)[0], curves=_tone_from_vec(v)[1]),
         {"tone": True, "balance": True, "chroma": False, "zones": False},
     )
