@@ -21,6 +21,7 @@ from .filmsystem import (
     CouplingParams,
     FilmSystemParams,
     NegativeParams,
+    PrinterLights,
     PrintParams,
     apply_film_system,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "HueZoneParams",
     "NegativeParams",
     "PrintParams",
+    "PrinterLights",
     "SCurveParams",
     "SatLumaParams",
     "apply_crosstalk",

@@ -186,11 +186,17 @@ def validate_baked_cube(cube: Cube, placement: str = "node2") -> ValidationRepor
 
 _BLOCK_STACKS = (
     ("crosstalk", lambda m: FilmModel(crosstalk=m.crosstalk)),
-    ("tone curves", lambda m: FilmModel(crosstalk=m.crosstalk, curves=m.curves)),
-    ("sat-vs-luma", lambda m: FilmModel(crosstalk=m.crosstalk, curves=m.curves,
-                                        sat_luma=m.sat_luma)),
-    ("hue zones", lambda m: FilmModel(crosstalk=m.crosstalk, curves=m.curves,
-                                      sat_luma=m.sat_luma, hue_zones=m.hue_zones)),
+    ("film system", lambda m: FilmModel(crosstalk=m.crosstalk, film_system=m.film_system)),
+    ("tone curves", lambda m: FilmModel(crosstalk=m.crosstalk, film_system=m.film_system,
+                                        curves=m.curves)),
+    ("sat-vs-luma", lambda m: FilmModel(crosstalk=m.crosstalk, film_system=m.film_system,
+                                        curves=m.curves, sat_luma=m.sat_luma)),
+    ("hue zones", lambda m: FilmModel(crosstalk=m.crosstalk, film_system=m.film_system,
+                                      curves=m.curves, sat_luma=m.sat_luma,
+                                      hue_zones=m.hue_zones)),
+    ("hue curve", lambda m: FilmModel(crosstalk=m.crosstalk, film_system=m.film_system,
+                                      curves=m.curves, sat_luma=m.sat_luma,
+                                      hue_zones=m.hue_zones, hue_fourier=m.hue_fourier)),
 )
 
 

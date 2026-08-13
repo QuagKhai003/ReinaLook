@@ -21,7 +21,13 @@ from __future__ import annotations
 from dataclasses import asdict, fields
 
 from .crosstalk import CrosstalkParams
-from .filmsystem import CouplingParams, FilmSystemParams, NegativeParams, PrintParams
+from .filmsystem import (
+    CouplingParams,
+    FilmSystemParams,
+    NegativeParams,
+    PrinterLights,
+    PrintParams,
+)
 from .fourierhue import FourierHueParams
 from .globaltrim import GlobalParams
 from .huezone import HueZoneParams
@@ -53,6 +59,7 @@ def model_to_dict(model: FilmModel) -> dict:
             "negative": asdict(model.film_system.negative),
             "coupling": asdict(model.film_system.coupling),
             "printer": asdict(model.film_system.printer),
+            "lights": asdict(model.film_system.lights),
         },
     }
 
@@ -71,6 +78,7 @@ def model_from_dict(data: dict) -> FilmModel:
             negative=_from_known(NegativeParams, fs_d.get("negative", {})),
             coupling=_from_known(CouplingParams, fs_d.get("coupling", {})),
             printer=_from_known(PrintParams, fs_d.get("printer", {})),
+            lights=_from_known(PrinterLights, fs_d.get("lights", {})),
         ),
         crosstalk=_from_known(CrosstalkParams, data.get("crosstalk", {})),
         curves=(

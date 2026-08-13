@@ -29,8 +29,10 @@ from .worker import Cancelled, ComputeThread
 
 _IMG_FILTER = ("Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);; All files (*)")
 # stage -> progress % shown while that stage runs
-_STAGE_PCT = {"tone": 10, "crosstalk": 40, "huesat": 65, "polish": 88, "done": 100}
+_STAGE_PCT = {"tone": 10, "crosstalk": 35, "coupling": 52, "huesat": 68, "polish": 88,
+              "done": 100}
 _STAGE_TEXT = {"tone": "Fitting tone…", "crosstalk": "Fitting crosstalk…",
+               "coupling": "Fitting colour coupling…",
                "huesat": "Fitting hue/sat detail…", "polish": "Polishing hue brightness…",
                "done": "Done"}
 

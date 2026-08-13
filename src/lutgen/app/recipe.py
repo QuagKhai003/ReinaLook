@@ -110,6 +110,11 @@ def _fmt_filmsystem(fs) -> list[str]:
              ("gb", cp.gb), ("br", cp.br), ("bg", cp.bg)) if abs(v) > _EPS]
     if coup:
         rows.append("  coupling: " + " · ".join(coup))
+    li = fs.lights
+    bits = [f"{ch} {v:+.2f} st" for ch, v in (("R", li.r), ("G", li.g), ("B", li.b))
+            if abs(v) > _EPS]
+    if bits:
+        rows.append("  printer lights: " + " · ".join(bits))
     pr = fs.printer
     bits = []
     if abs(pr.slope - 1.0) > _EPS:

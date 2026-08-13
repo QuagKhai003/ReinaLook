@@ -24,7 +24,13 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from .crosstalk import CrosstalkParams
-from .filmsystem import CouplingParams, FilmSystemParams, NegativeParams, PrintParams
+from .filmsystem import (
+    CouplingParams,
+    FilmSystemParams,
+    NegativeParams,
+    PrinterLights,
+    PrintParams,
+)
 from .fourierhue import FourierHueParams
 from .globaltrim import GlobalParams
 from .huezone import HueZoneParams
@@ -65,7 +71,13 @@ def _split_film_system(fs: FilmSystemParams, t: float, c: float) -> FilmSystemPa
     g = (fs.negative.g_r, fs.negative.g_g, fs.negative.g_b)
     mean = sum(g) / 3.0
     g_r, g_g, g_b = (min(2.0, max(0.5, 1.0 + t * (mean - 1.0) + c * (v - mean))) for v in g)
+    # printer lights: the mean offset is exposure-like (tone), the deviations are the
+    # colour timing (color) — same decomposition as the curves
+    li = (fs.lights.r, fs.lights.g, fs.lights.b)
+    li_mean = sum(li) / 3.0
+    l_r, l_g, l_b = (t * li_mean + c * (v - li_mean) for v in li)
     return FilmSystemParams(
+        lights=PrinterLights(r=l_r, g=l_g, b=l_b),
         negative=NegativeParams(g_r=g_r, g_g=g_g, g_b=g_b,
                                 toe=t * fs.negative.toe, toe_at=fs.negative.toe_at),
         coupling=CouplingParams(**{k: max(0.0, v * c)

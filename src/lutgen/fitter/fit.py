@@ -1,20 +1,27 @@
-"""fit — staged bounded fit of the v2 FilmModel to pooled reference targets.
+"""fit — staged bounded fit of the v3 FilmModel to pooled reference targets.
 
-@context  The heart of v2 (ADR-0001 b1.4, spec §5): find the ~33 film-shaped parameters whose
-          transform best explains the reference pool. Method: synthesize a deterministic
-          "source world" sample cloud from the source targets (neutral prior by default),
-          push it display -> DI (inverse base) -> FilmModel -> display (base), measure the
-          same statistics poolstats measures, and least-squares them against the reference
-          targets. STAGED (non-negotiable): tone curves first, then crosstalk, then C/D —
-          each stage freezes the previous ones. Fitting all params at once is not stable.
+@context  The heart of the engine (ADR-0001 b1.4, spec §5; rebuilt over Block F in
+          ADR-0008 b8.4): find the film-shaped parameters whose transform best explains
+          the reference pool. Method: synthesize a deterministic "source world" sample
+          cloud from the source targets (neutral prior by default), push it display -> DI
+          (inverse base) -> FilmModel -> display (base), measure the same statistics
+          poolstats measures, and least-squares them against the reference targets.
+          STAGED (non-negotiable): G+F tonal core first (started AT and anchored TO the
+          film-print character preset — weak pool ships film, not identity), then
+          crosstalk, then coupling+hue curve, then polish. satluma and the legacy display
+          S-curves are NOT fitted (v3): sat-vs-luma emerges from the print slope.
 @done     FitOptions, FitResult, fit_film_model (4 staged bounded scipy least_squares),
           synth_samples (deterministic source cloud), exposure alignment of the prior world
           (ADR-0003: scene brightness is content — the assumed world's median exposure is
           matched to the pool's so tone curves learn SHAPE; real source pools never rescaled).
-          Fit-v2 losses (ADR-0008 b8.3): tail-weighted tone quantiles, saturation-
-          distribution shape residual (level-free tail/median ratios, Hunt-compensated,
-          ref p95 tile-debiased, asymmetric under-sat), robust soft-l1 loss.
-@todo     Global exposure/black trims (spec budget) if acceptance shows they're needed.
+          Fit-v2 losses (ADR-0008 b8.3, active in the b8.4 layout): tail-weighted tone
+          quantiles, saturation-distribution shape residual (level-free tail/median
+          ratios, ref p95 tile-debiased, asymmetric under-sat, polish stage), per-band
+          Hunt compensation. b8.4 wiring: 5 stages over Block F — tone (G + neg + print +
+          printer lights, preset x0/anchor, confidence-aware knee ridge), crosstalk,
+          SYMMETRIC coupling (3 pair params — the asymmetric part is a hue rotation
+          invisible to chroma stats), Fourier hue curve, polish.
+@todo     b8.5 acceptance on real pools (user eyeball gate).
           Outlier frame down-weighting (poolstats @todo) — evaluate on real pools.
 @limits   Conditional colour (ADR-0006): band_mean_ab residuals in every stage teach the
           "shadows cool / highlights warm" behaviour; exposure carries its own strong ridge
@@ -42,12 +49,16 @@ from lutgen.engine.base import DEFAULT_SIZE, INVERSE_SIZE, load_base, load_base_
 from lutgen.engine.grid import reshape_to_lattice
 from lutgen.engine.perceptual import from_oklab, to_oklab
 from lutgen.fitter.filmmodel import (
+    CouplingParams,
     CrosstalkParams,
     FilmModel,
+    FilmSystemParams,
     FourierHueParams,
     GlobalParams,
-    SatLumaParams,
-    SCurveParams,
+    NegativeParams,
+    PrinterLights,
+    PrintParams,
+    film_print_character,
 )
 from lutgen.orchestration.poolstats import (
     HUE_BIN_CENTERS,
@@ -61,7 +72,7 @@ from lutgen.orchestration.poolstats import (
 ProgressFn = Callable[[str], None]
 
 # Stage names (also what the progress callback receives, spec §9 "Fitting tone…").
-STAGES = ("tone", "crosstalk", "huesat", "polish")
+STAGES = ("tone", "crosstalk", "coupling", "huesat", "polish")
 
 
 @dataclass
@@ -71,9 +82,13 @@ class FitOptions:
     n_samples: int = 3000        # source-cloud size (statistics are heavily over-determined)
     seed: int = 0                # cloud seed — fixed => deterministic fit
     w0: float = 0.02             # thin-data knee: conf = sqrt(w/(w+w0))
-    ridge_tone: float = 0.05     # pull-to-neutral strength per stage (per-region reg.)
+    ridge_tone: float = 0.03     # pull-to-anchor strength (v3: anchor = film preset).
+                                 # 0.05 held the preset shoulder against a well-measured
+                                 # identity world (6% highlight bias); 0.03 lets thick
+                                 # evidence win while thin pools still relax to film
     ridge_crosstalk: float = 0.15
     ridge_huesat: float = 0.05  # loosened in ADR-0007 — the §6 validator is the safety gate
+    ridge_coupling: float = 0.3  # DIR coupling anchored to the film-print preset (ADR-0008)
     quantile_weight: float = 1.0
     balance_weight: float = 2.0
     band_balance_weight: float = 3.0  # per-band a/b targets (ADR-0006 A) — the conditional
@@ -87,23 +102,17 @@ class FitOptions:
     diff_step: float = 0.02           # finite-difference secant step: statistics of a
                                       # finite sample cloud carry O(1/n) quantization;
                                       # a wide secant averages over it (ADR-0007)
-    # ── fit-v2 losses (ADR-0008 b8.3) ──
-    # Defaults are CONSERVATIVE in the legacy stage layout: the b8.3 ablations showed
-    # tail_weight/hunt_alpha in these stages perturb the tone solution enough to break
-    # the (fragile, synthetic-worst-case) hue-block recoveries, because the legacy model
-    # has no proper punch lever for them to feed. b8.4 rewires the stages around Block F
-    # (print slope IS the punch mechanism) and activates them there.
-    tail_weight: float = 1.0          # tone-quantile tail boost: extremes weigh up to this
-                                      # factor (film's identity lives at toe/shoulder);
-                                      # 1 = uniform. Activated in the b8.4 stage layout.
+    # ── fit-v2 losses (ADR-0008 b8.3, ACTIVATED in the b8.4 Block-F stage layout) ──
+    tail_weight: float = 2.0          # tone-quantile tail boost: extremes weigh up to this
+                                      # factor — film's identity lives at toe/shoulder.
+                                      # Primary tone stages only (anchors stay uniform).
     spread_weight: float = 2.0        # saturation-DISTRIBUTION shape residual (Hasler:
                                       # punch = tails vs median, level-free ratios) —
-                                      # POLISH stage only (safe: anchored refinement)
-    hunt_alpha: float = 0.0           # Hunt-effect compensation: perceived colourfulness
+                                      # tone + polish stages, where print slope (the punch
+                                      # mechanism) is the parameter being fitted
+    hunt_alpha: float = 0.15          # Hunt-effect compensation: perceived colourfulness
                                       # rises with luminance — per-BAND sat is weighted by
-                                      # (1 + alpha*(bandL - 0.45)) before shape comparison.
-                                      # Off by default pending b8.4 (measurably degraded
-                                      # hue recovery in the legacy layout)
+                                      # (1 + alpha*(bandL - 0.45)) before shape comparison
     under_sat: float = 2.0            # asymmetry on the spread residual only: losing tail
                                       # saturation costs this x more than gaining it
                                       # (level residuals stay symmetric — vividness contract)
@@ -203,51 +212,74 @@ def _cube_fn(samples: np.ndarray, size: int):
     return lambda x: interp(np.clip(x, 0.0, 1.0)[:, ::-1])
 
 
-# ── parameter vectors per stage ───────────────────────────────────────
+# ── parameter vectors per stage (v3: Block F is the tonal core, ADR-0008) ──
 
-# tone stage vector: global exposure (Block G) + (toe, shoulder, slope, pivot) x RGB
-_TONE_NEUTRAL = np.array([0.0] + [0.0, 0.0, 1.0, 0.5] * 3)
-_TONE_LO = np.array([-0.3] + [0.0, 0.0, 0.5, 0.3] * 3)
-_TONE_HI = np.array([0.3] + [2.0, 2.0, 2.0, 0.7] * 3)
+_PRESET = film_print_character()
+
+# tone stage vector: Block G exposure + negative (g_r, g_g, g_b, toe) + print (slope,
+# shoulder, ptoe). x0 AND the ridge anchor are the film-print character preset — a weak
+# pool relaxes toward FILM, not toward identity (ADR-0008). toe_at / range_hi / range_lo
+# stay at the preset's datasheet positions (fitting knee POSITIONS from marginal
+# statistics is under-determined; strengths are what the data can support).
+_FTONE_X0 = np.array([0.0,
+                      _PRESET.negative.g_r, _PRESET.negative.g_g, _PRESET.negative.g_b,
+                      _PRESET.negative.toe,
+                      _PRESET.printer.slope, _PRESET.printer.shoulder, _PRESET.printer.ptoe,
+                      0.0, 0.0, 0.0])                   # printer lights r/g/b (stops)
+# physics bounds (research briefs): relative gammas near the LAD window, system contrast
+# 0.9-1.9, convergence strengths in [0, 1) where the softplus knees stay monotone,
+# printer lights within ±0.5 stop per channel (colour timing range)
+_FTONE_LO = np.array([-0.3, 0.70, 0.70, 0.70, 0.0, 0.90, 0.0, 0.0, -0.5, -0.5, -0.5])
+_FTONE_HI = np.array([0.3, 1.35, 1.35, 1.35, 0.8, 1.90, 0.95, 0.95, 0.5, 0.5, 0.5])
+
 _CT_NEUTRAL = np.zeros(6)
 _CT_LO, _CT_HI = np.full(6, -0.25), np.full(6, 0.25)
-# satluma x3, then the Fourier hue curve: 9 shift coefs (rad) + 9 trim coefs (ADR-0007;
-# the legacy 6-zone params are no longer fitted — they remain for old profiles only).
-# Spectral decay: order-k coefficients are bounded by base/k, keeping the curve's DERIVATIVE
-# bounded (a steep hue curve compresses hues into delta-E spikes and tone reversals).
+
+# hue stage vector: DIR coupling (6 suppression amounts >= 0 — saturation-non-decreasing
+# by construction) + the Fourier hue curve (23 coefs). satluma is RETIRED from the fit
+# (ADR-0008): sat-vs-luma behaviour EMERGES from the print curve's slope profile; the
+# block stays in the model for old profiles only.
+# Spectral decay: order-k coefficients are bounded by base/k, keeping the curve's
+# DERIVATIVE bounded (a steep hue curve compresses hues into delta-E spikes).
 _HARM = np.array([1.0, 1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0])   # k per coef (a0, a1..a4, b1..b4)
 _HARM_L = np.array([1.0, 1.0, 2.0, 1.0, 2.0])                     # Block E: l0, lc1, lc2, ls1, ls2
-_CD_NEUTRAL = np.array([1.0, 1.0, 1.0] + [0.0] * 23)
-# sat-vs-luma bounded to the physically-plausible film range: multipliers near 2x create
-# chroma gradients steep enough to reverse channels on saturated ramps (found by the gate)
-# sat-vs-luma is a gentle RELATIVE shape only (±30%); level is never learned
-_CD_LO = np.concatenate([[0.7, 0.7, 0.7], -0.12 / _HARM, -0.25 / _HARM, -0.2 / _HARM_L])
-_CD_HI = np.concatenate([[1.3, 1.3, 1.3], 0.12 / _HARM, 0.25 / _HARM, 0.2 / _HARM_L])
+# Coupling is fitted SYMMETRIC (3 pair strengths): its asymmetric part is a hue ROTATION,
+# invisible to the chroma statistics this stage fits — left free it floats on noise and
+# corrupts the hue curve fitted after it (twist recovery corr -0.20 measured). Symmetric
+# suppression is pure separation, zero net rotation; hue personality belongs to the curve.
+_COUP_X0 = np.array([(_PRESET.coupling.rg + _PRESET.coupling.gr) / 2,
+                     (_PRESET.coupling.rb + _PRESET.coupling.br) / 2,
+                     (_PRESET.coupling.gb + _PRESET.coupling.bg) / 2])
+_COUP_LO, _COUP_HI = np.zeros(3), np.full(3, 0.15)
+_HUE_X0 = np.zeros(23)
+_HUE_LO = np.concatenate([-0.12 / _HARM, -0.25 / _HARM, -0.2 / _HARM_L])
+_HUE_HI = np.concatenate([0.12 / _HARM, 0.25 / _HARM, 0.2 / _HARM_L])
 
 
-def _tone_from_vec(v: np.ndarray) -> tuple[GlobalParams, tuple[SCurveParams, SCurveParams, SCurveParams]]:
-    curves = tuple(
-        SCurveParams(toe=v[i], shoulder=v[i + 1], slope=v[i + 2], pivot=v[i + 3])
-        for i in (1, 5, 9)
-    )
-    return GlobalParams(exposure=v[0]), curves
+def _ftone_from_vec(v: np.ndarray, coupling: CouplingParams) -> tuple[GlobalParams, FilmSystemParams]:
+    negative = NegativeParams(g_r=v[1], g_g=v[2], g_b=v[3], toe=v[4],
+                              toe_at=_PRESET.negative.toe_at)
+    printer = PrintParams(slope=v[5], shoulder=v[6], ptoe=v[7],
+                          range_hi=_PRESET.printer.range_hi,
+                          range_lo=_PRESET.printer.range_lo)
+    lights = PrinterLights(r=v[8], g=v[9], b=v[10])
+    return GlobalParams(exposure=v[0]), FilmSystemParams(negative, coupling, printer, lights)
 
 
 def _ct_from_vec(v: np.ndarray) -> CrosstalkParams:
     return CrosstalkParams(rg=v[0], rb=v[1], gr=v[2], gb=v[3], br=v[4], bg=v[5])
 
 
-def _cd_from_vec(v: np.ndarray) -> tuple[SatLumaParams, FourierHueParams]:
-    # Saturation LEVEL is never learned (ADR-0007): web-still statistics under-measure a
-    # film's perceived vividness (compression + dark grades), so the fit chased dull numbers
-    # and the user's footage lost its colour. Only the RELATIVE saturation behaviour is
-    # learned: sat-vs-luma is normalized to mean 1, and the hue-trim curve's DC term (t0)
-    # is zeroed — hue-to-hue differences survive, the overall level stays the footage's own.
-    sl = SatLumaParams(shadow=v[0], mid=v[1], high=v[2])
-    coefs = dict(zip(FourierHueParams.field_names(), v[3:], strict=True))
+def _coup_from_vec(v: np.ndarray) -> CouplingParams:
+    return CouplingParams(rg=v[0], gr=v[0], rb=v[1], br=v[1], gb=v[2], bg=v[2])
+
+
+def _hue_from_vec(v: np.ndarray) -> FourierHueParams:
+    # Saturation LEVEL is never learned (ADR-0007): the hue-trim curve's DC term (t0) is
+    # zeroed, so hue-to-hue differences survive while the level stays the footage's own.
+    coefs = dict(zip(FourierHueParams.field_names(), v, strict=True))
     coefs["t0"] = 0.0                                    # sat level is never learned
-    fh = FourierHueParams(**coefs)
-    return sl, fh
+    return FourierHueParams(**coefs)
 
 
 # ── residuals ─────────────────────────────────────────────────────────
@@ -401,55 +433,102 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
         result.stage_nfev[name] = int(sol.nfev)
         return sol.x
 
-    # Stage 1 — global exposure + tone curves (Blocks G+B). The most abundant statistic.
-    tone_ridge = np.full(_TONE_NEUTRAL.shape, opt.ridge_tone)
+    # Stage 1 — exposure + film system tonal core (Blocks G+F: negative gammas/toe, print
+    # slope/shoulder/ptoe). Starts AT the film-print character and is ridge-anchored there:
+    # a weak pool ships film, not identity. The spread residual is active here — print
+    # slope IS the punch mechanism (sat follows slope), so it finally has its lever.
+    tone_ridge = np.full(_FTONE_X0.shape, opt.ridge_tone)
     tone_ridge[0] = opt.ridge_exposure                 # ADR-0006 C: the lazy global darkening
+    # CONFIDENCE-AWARE preset anchoring (ADR-0008): the knee strengths (neg toe, shoulder,
+    # print toe) act where data is often thin — anchor them to the film preset ONLY to the
+    # extent the pool's own tail bands are thin. A pool that HAS measured highlights gets
+    # its own shoulder; a night pool keeps film's. This is what makes "weak pool => film"
+    # per-REGION instead of a global bias.
+    c_lo = float(_conf(np.array([ref.band_weight[0]]), opt.w0)[0])
+    c_hi = float(_conf(np.array([ref.band_weight[-1]]), opt.w0)[0])
+    tone_ridge[4] *= 1.0 - 0.9 * c_lo                  # negative toe
+    tone_ridge[6] *= 1.0 - 0.9 * c_hi                  # print shoulder
+    tone_ridge[7] *= 1.0 - 0.9 * c_lo                  # print black convergence
+    tone_ridge[8:] = opt.ridge_crosstalk               # printer lights: cast params, same
+                                                       # caution as the crosstalk mixer
+    # Coupling stays NEUTRAL until its own stage: the preset's asymmetric suppression
+    # rotates the hue field, and fitting tone/crosstalk on a pre-rotated world sends the
+    # balance signal into the wrong blocks (crosstalk chased a pure hue twist with -0.08
+    # entries — measured).
     tone_v = run_stage(
-        "tone", _TONE_NEUTRAL, _TONE_LO, _TONE_HI, tone_ridge, _TONE_NEUTRAL,
-        lambda v: FilmModel(global_trim=_tone_from_vec(v)[0], curves=_tone_from_vec(v)[1]),
-        {"tone": True, "balance": True, "chroma": False, "zones": False},
+        "tone", _FTONE_X0, _FTONE_LO, _FTONE_HI, tone_ridge, _FTONE_X0,
+        lambda v: FilmModel(global_trim=_ftone_from_vec(v, CouplingParams())[0],
+                            film_system=_ftone_from_vec(v, CouplingParams())[1]),
+        {"tone": True, "balance": True, "chroma": True, "zones": False, "spread": True},
     )
-    global_trim, curves = _tone_from_vec(tone_v)
 
-    # Stage 2 — crosstalk (Block A). Tone frozen; quantiles stay as a soft anchor.
+    def _fs_of(v, coupling):
+        return _ftone_from_vec(v, coupling)
+
+    global_trim, film_system = _fs_of(tone_v, CouplingParams())
+
+    # Stage 2 — crosstalk (Block A: the rendering-primaries mixer in front of the film
+    # system — the hue crossovers ARE the look). Tone frozen; quantiles stay a soft anchor.
     ct_v = run_stage(
         "crosstalk", _CT_NEUTRAL, _CT_LO, _CT_HI, opt.ridge_crosstalk, _CT_NEUTRAL,
-        lambda v: FilmModel(global_trim=global_trim, crosstalk=_ct_from_vec(v), curves=curves),
+        lambda v: FilmModel(global_trim=global_trim, crosstalk=_ct_from_vec(v),
+                            film_system=film_system),
         {"tone": True, "balance": True, "chroma": False, "zones": False,
          "tone_weight": opt.tone_anchor_weight},  # hue detail belongs to the Fourier stage
-
     )
     crosstalk = _ct_from_vec(ct_v)
 
-    # Stage 3 — saturation & hue detail (Blocks C/D). G, A and B frozen.
-    # trim coefficients ridge stiffer than shift (spurious sat wiggle bands on gradients);
-    # higher harmonics ridge ~k^2 — a curvature penalty, the classic smoothness prior
-    cd_ridge = np.concatenate([np.full(3, opt.ridge_huesat * 4.0),  # sat shape: gentle
-                               opt.ridge_huesat * _HARM ** 2,
-                               opt.ridge_huesat * 4.0 * _HARM ** 2,
-                               opt.ridge_huesat * 0.5 * _HARM_L ** 2])  # Block E
-    cd_v = run_stage(
-        "huesat", _CD_NEUTRAL, _CD_LO, _CD_HI, cd_ridge, _CD_NEUTRAL,
-        lambda v: FilmModel(global_trim=global_trim, crosstalk=crosstalk, curves=curves,
-                            sat_luma=_cd_from_vec(v)[0], hue_fourier=_cd_from_vec(v)[1]),
-        {"tone": True, "balance": True, "chroma": True, "zones": True,
+    # Stage 3 — DIR coupling (F.coupling): the density-domain saturation machinery, fitted
+    # against the chroma statistics ONLY. Separate from the hue curve — co-fitting the two
+    # let coupling corrupt the hue field (twist recovery corr -0.30 measured); one signal,
+    # one block is this codebase's hard-won staging rule.
+    coup_v = run_stage(
+        "coupling", _COUP_X0, _COUP_LO, _COUP_HI, opt.ridge_coupling, _COUP_X0,
+        # chroma statistics ONLY (plus the tone anchor): asymmetric coupling rotates the
+        # hue field as a side effect, so letting it chase balance targets corrupts the
+        # hue curve fitted after it — the mean-colour signal belongs to crosstalk.
+        lambda v: FilmModel(global_trim=global_trim, crosstalk=crosstalk,
+                            film_system=_fs_of(tone_v, _coup_from_vec(v))[1]),
+        {"tone": True, "balance": False, "chroma": True, "zones": False,
          "tone_weight": opt.tone_anchor_weight},
     )
-    sat_luma, hue_fourier = _cd_from_vec(cd_v)
+    coupling = _coup_from_vec(coup_v)
+    film_system = _fs_of(tone_v, coupling)[1]
 
-    # Stage 4 — polish (per-hue LUMINANCE): with the hue field settled, re-fit tone+crosstalk
-    # against the hue-luma targets ("lush vs olive greens") — the only blocks that can move a
-    # hue family's brightness. Anchored at the stage-1/2 solution, so this refines rather
-    # than re-opens the tone fit.
+    # Stage 4 — hue personality (the Fourier curve). Everything tonal/saturation frozen;
+    # the trim coefficients ridge stiffer than shift; higher harmonics ridge ~k^2
+    # (curvature prior — the classic smoothness penalty).
+    hue_ridge = np.concatenate([opt.ridge_huesat * _HARM ** 2,
+                                opt.ridge_huesat * 10.0 * _HARM ** 2,   # trims: see below
+                                opt.ridge_huesat * 0.5 * _HARM_L ** 2])  # Block E
+    # trims ridge 10x (was 4x): when the pool sits at a different level than the source
+    # world, Block F's knees leave per-hue vividness residue that the trims chase as a
+    # phantom (tc1 hit 0.24 on the darkened-world guard) — hue-relative sat personality
+    # must be cheap only when the signal is strong
+    hue_v = run_stage(
+        "huesat", _HUE_X0, _HUE_LO, _HUE_HI, hue_ridge, _HUE_X0,
+        # zones (per-hue angle/vividness) + balance only: the band-chroma shape belongs
+        # to the coupling/tone stages — with satluma retired, a chroma residual here can
+        # only be (mis)expressed through the trim coefficients (bound-slams measured)
+        lambda v: FilmModel(global_trim=global_trim, crosstalk=crosstalk,
+                            film_system=film_system, hue_fourier=_hue_from_vec(v)),
+        {"tone": True, "balance": True, "chroma": False, "zones": True,
+         "tone_weight": opt.tone_anchor_weight},
+    )
+    hue_fourier = _hue_from_vec(hue_v)
+
+    # Stage 5 — polish (per-hue LUMINANCE + punch): with the hue field settled, re-fit
+    # G+F tone + crosstalk against the hue-luma targets ("lush vs olive greens") and the
+    # spread residual. Anchored at the stage-1/2 solution: refinement, not re-opening.
     p0 = np.concatenate([tone_v, ct_v])
-    p_lo = np.concatenate([_TONE_LO, _CT_LO])
-    p_hi = np.concatenate([_TONE_HI, _CT_HI])
-    p_ridge = np.concatenate([np.full(13, 0.3), np.full(6, 0.3)])
+    p_lo = np.concatenate([_FTONE_LO, _CT_LO])
+    p_hi = np.concatenate([_FTONE_HI, _CT_HI])
+    p_ridge = np.concatenate([np.full(_FTONE_X0.size, 0.3), np.full(6, 0.3)])
 
     def _polish_model(v):
-        gt, cv = _tone_from_vec(v[:13])
-        return FilmModel(global_trim=gt, crosstalk=_ct_from_vec(v[13:]), curves=cv,
-                         sat_luma=sat_luma, hue_fourier=hue_fourier)
+        gt, fs = _fs_of(v[:_FTONE_X0.size], coupling)
+        return FilmModel(global_trim=gt, crosstalk=_ct_from_vec(v[_FTONE_X0.size:]),
+                         film_system=fs, hue_fourier=hue_fourier)
 
     pol_v = run_stage(
         "polish", p0, p_lo, p_hi, p_ridge, p0,
@@ -457,11 +536,11 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
         {"tone": True, "balance": True, "chroma": False, "zones": False, "hue_luma": True,
          "spread": True, "tone_weight": opt.tone_anchor_weight},
     )
-    global_trim, curves = _tone_from_vec(pol_v[:13])
-    crosstalk = _ct_from_vec(pol_v[13:])
+    global_trim, film_system = _fs_of(pol_v[:_FTONE_X0.size], coupling)
+    crosstalk = _ct_from_vec(pol_v[_FTONE_X0.size:])
 
-    result.model = FilmModel(global_trim=global_trim, crosstalk=crosstalk, curves=curves,
-                             sat_luma=sat_luma, hue_fourier=hue_fourier)
+    result.model = FilmModel(global_trim=global_trim, crosstalk=crosstalk,
+                             film_system=film_system, hue_fourier=hue_fourier)
     if progress:
         progress("done")
     return result

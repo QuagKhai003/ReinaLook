@@ -82,6 +82,10 @@ _SPEC += [
                    ("gb", "G ⊣ B"), ("br", "B ⊣ R"), ("bg", "B ⊣ G"))
 ]
 _SPEC += [
+    ("Film system — printer lights", ("film_system", "lights", k), lbl, -0.5, 0.5, 0.01, _ID)
+    for k, lbl in (("r", "R (stops)"), ("g", "G (stops)"), ("b", "B (stops)"))
+]
+_SPEC += [
     ("Film system — print", ("film_system", "printer", "slope"), "Contrast ×", 0.5, 2.5, 0.01, _ID),
     ("Film system — print", ("film_system", "printer", "shoulder"), "Shoulder", 0.0, 1.0, 0.01, _ID),
     ("Film system — print", ("film_system", "printer", "ptoe"), "Black convergence", 0.0, 1.0, 0.01, _ID),
