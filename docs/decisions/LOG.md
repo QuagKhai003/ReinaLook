@@ -14,6 +14,8 @@ Format: `YYYY-MM-DD — <what was decided> — <why, in a few words> (ADR-NNNN i
 
 ---
 
+- 2026-08-13 — (b8.5) mixed pool now learns BOTH profiles in one run ("name — bright" + "name — dark", saved as -bright/-dark): user's footage is mixed too; one-output-per-learn forced manual frame surgery (ADR-0008)
+- 2026-08-13 — (b8.5) GUI targets-cache BUG fixed: precomputed pool targets bypassed the lighting grouping entirely — the GUI was learning mixed pools blended into neither look; cache removed, correctness over seconds of ingest (ADR-0008)
 - 2026-08-13 — docs/ + tests/ now TRACKED in git (user call, reversing the init-time local-only policy): the D: drive failure made the single-point-of-failure cost concrete — project memory and the safety net belong in version control
 - 2026-08-13 — (b8.5) skin corridor asymmetry widened warm-ward (2×→5× tol ≈ 17°): the 6.9° warm corridor vetoed legitimate warm film tints (Block S learned all-zero poles under it); film warms skin freely — only magenta stays hard-blocked at 3.4° (ADR-0008)
 - 2026-08-13 — (b8.5) BLOCK S added — luminance-conditional tint curve (5 Oklab a/b poles aligned to poolstats' L bands): user verdict "adding contrast, not transforming color" — measured: refs paint a warm ARCH (b .005/.026/.032/.027/.019) that every existing block (gammas/crosstalk/lights = monotone drifts) is structurally unable to express (ADR-0008)

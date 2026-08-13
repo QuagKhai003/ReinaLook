@@ -36,9 +36,9 @@ def test_recipe_summary_shows_nonneutral_hides_neutral():
     assert "shadow -18%" in s
     assert "R: hue +2.3°" in s and "B: sat +11%" in s
     assert "6 frames" in s
-    assert s.count("neutral") == 2          # empty film-system + v2.1 hue-curve groups...
+    assert s.count("neutral") == 3          # empty film-system + split-tone + hue-curve groups...
     # ...but an identity profile collapses to all-neutral groups:
-    assert recipe_summary(LookProfile(model=FilmModel.identity())).count("neutral") == 6
+    assert recipe_summary(LookProfile(model=FilmModel.identity())).count("neutral") == 7
 
 
 # ── Qt widget tests (offscreen) ───────────────────────────────────────

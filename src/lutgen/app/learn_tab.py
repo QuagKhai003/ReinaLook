@@ -21,7 +21,7 @@ from __future__ import annotations
 from PySide6 import QtWidgets
 
 from lutgen.fitter.fit import FitOptions
-from lutgen.orchestration.learn import frame_count_hint, learn_profile, pool_targets
+from lutgen.orchestration.learn import frame_count_hint, learn_profiles_by_lighting
 from lutgen.orchestration.profile import LookProfile, save_profile
 
 from .recipe import recipe_summary
@@ -56,7 +56,6 @@ class LearnTab(QtWidgets.QWidget):
         self._cancel = False
         # spec §9 caching: pooled stats recompute only when the POOL changes — a re-Learn
         # (e.g. draft -> full quality) with the same frames skips ingest + statistics.
-        self._targets_cache: tuple[tuple[str, ...], object] | None = None
         self._build_ui()
         self._update_hint()
 
@@ -159,21 +158,20 @@ class LearnTab(QtWidgets.QWidget):
         self._thread = thread
         thread.start()
 
-    def _fit_payload(self, paths, options) -> LookProfile:
-        """Worker-thread payload. Stage callback also carries the cooperative cancel."""
+    def _fit_payload(self, paths, options) -> list[LookProfile]:
+        """Worker-thread payload. Stage callback also carries the cooperative cancel.
+
+        Learns per lighting mood (a mixed pool yields BOTH the bright and the dark
+        profile — the user's footage is usually mixed too). The old precomputed-targets
+        cache bypassed the lighting grouping entirely (mixed pools were blended into
+        neither look); ingest is seconds, correctness wins."""
         def progress(stage: str) -> None:
             if self._cancel:
                 raise Cancelled()
             self._thread.stage.emit(stage)
 
-        key = tuple(paths)
-        if self._targets_cache is not None and self._targets_cache[0] == key:
-            targets = self._targets_cache[1]           # unchanged pool -> skip ingest+stats
-        else:
-            targets = pool_targets(paths)
-            self._targets_cache = (key, targets)
-        return learn_profile(paths, name="untitled", options=options, progress=progress,
-                             targets=targets)
+        return learn_profiles_by_lighting(paths, name="untitled", options=options,
+                                          progress=progress)
 
     def _on_stage(self, stage: str) -> None:
         self._stage_lbl.setText(_STAGE_TEXT.get(stage, stage))
@@ -202,11 +200,15 @@ class LearnTab(QtWidgets.QWidget):
         if isinstance(result, Exception):
             QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not learn the look:\n{result}")
             return
-        self._profile = result
-        text = recipe_summary(result)
-        if result.grouping_note:
-            text = "NOTE: " + result.grouping_note + "\n\n" + text
-        self._summary.setPlainText(text)
+        profiles = result if isinstance(result, list) else [result]
+        self._profiles = profiles
+        self._profile = profiles[0]
+        parts = []
+        for p in profiles:
+            head = f"— {p.name} —\n" if len(profiles) > 1 else ""
+            note = ("NOTE: " + p.grouping_note + "\n\n") if p.grouping_note else ""
+            parts.append(head + note + recipe_summary(p))
+        self._summary.setPlainText("\n\n".join(parts))
         self._save_btn.setEnabled(True)
 
     # — save —
@@ -215,8 +217,17 @@ class LearnTab(QtWidgets.QWidget):
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save Look Profile", "look.json", "Look Profile (*.json)")
-        if path:
-            from pathlib import Path
-            self._profile.name = Path(path).stem
-            save_profile(path, self._profile)
-            QtWidgets.QMessageBox.information(self, "ReinaLook", f"Saved {path}")
+        if not path:
+            return
+        from pathlib import Path
+        p = Path(path)
+        profiles = getattr(self, "_profiles", None) or [self._profile]
+        saved = []
+        for i, prof in enumerate(profiles):
+            # one profile keeps the chosen name; a mixed-pool pair gets -bright / -dark
+            suffix = "" if len(profiles) == 1 else ("-bright" if i == 0 else "-dark")
+            out = p.with_name(p.stem + suffix + p.suffix)
+            prof.name = out.stem
+            save_profile(str(out), prof)
+            saved.append(str(out))
+        QtWidgets.QMessageBox.information(self, "ReinaLook", "Saved:\n" + "\n".join(saved))

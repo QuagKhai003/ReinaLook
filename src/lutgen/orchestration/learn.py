@@ -137,6 +137,39 @@ def learn_profile(
     return profile
 
 
+def learn_profiles_by_lighting(
+    ref_paths,
+    *,
+    name: str = "untitled",
+    max_dim: int | None = 1024,
+    options: FitOptions | None = None,
+    progress: ProgressFn | None = None,
+) -> list[LookProfile]:
+    """LEARN, once per lighting mood: a mixed pool yields BOTH profiles ("name — bright"
+    and "name — dark") instead of silently shipping only the dominant group's look (the
+    user's mixed-footage workflow: day scenes get A, night scenes get B). A single-mood
+    pool yields one profile named as given. The dark fit runs only when the excluded
+    group can carry one (>= 3 frames)."""
+    kept, dropped, note = group_pool_by_lighting(ref_paths, max_dim=max_dim)
+    if not dropped:
+        return [learn_profile(ref_paths, name=name, max_dim=max_dim,
+                              options=options, progress=progress)]
+    first = learn_profile(kept, name=f"{name} — bright", max_dim=max_dim,
+                          options=options, progress=progress)
+    first.grouping_note = note
+    profiles = [first]
+    if len(dropped) >= 3:
+        second = learn_profile(dropped, name=f"{name} — dark", max_dim=max_dim,
+                               options=options, progress=progress)
+        second.grouping_note = (f"the film's other look, learned from the {len(dropped)} "
+                                f"darker frames of the mixed pool")
+        profiles.append(second)
+    else:
+        first.grouping_note = (note + f" (only {len(dropped)} dark frames — too few to "
+                               f"fit their profile; add more for the dark look)")
+    return profiles
+
+
 def render_cube_from_profile(
     profile: LookProfile | FilmModel,
     strength: float = 1.0,
