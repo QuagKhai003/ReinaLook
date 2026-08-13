@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reinalook"
-version = "1.0.0"
+version = "2.0.0"
 description = "ReinaLook — generate a 3D .cube LUT (DWG/DI -> Rec.709 g2.4) carrying a look from reference images."
 requires-python = ">=3.11"
 dependencies = [
