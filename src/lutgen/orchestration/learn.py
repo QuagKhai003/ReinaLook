@@ -137,6 +137,67 @@ def learn_profile(
     return profile
 
 
+def learn_profiles_by_lighting(
+    ref_paths,
+    *,
+    name: str = "untitled",
+    max_dim: int | None = 1024,
+    options: FitOptions | None = None,
+    progress: ProgressFn | None = None,
+) -> list[LookProfile]:
+    """LEARN, once per lighting mood: a mixed pool yields BOTH profiles ("name — bright"
+    and "name — dark") instead of silently shipping only the dominant group's look (the
+    user's mixed-footage workflow: day scenes get A, night scenes get B). A single-mood
+    pool yields one profile named as given. The dark fit runs only when the excluded
+    group can carry one (>= 3 frames)."""
+    kept, dropped, note = group_pool_by_lighting(ref_paths, max_dim=max_dim)
+    if not dropped:
+        return [learn_profile(ref_paths, name=name, max_dim=max_dim,
+                              options=options, progress=progress)]
+    first = learn_profile(kept, name=f"{name} — bright", max_dim=max_dim,
+                          options=options, progress=progress)
+    first.grouping_note = note
+    profiles = [first]
+    if len(dropped) >= 3:
+        second = learn_profile(dropped, name=f"{name} — dark", max_dim=max_dim,
+                               options=options, progress=progress)
+        second.grouping_note = (f"the film's other look, learned from the {len(dropped)} "
+                                f"darker frames of the mixed pool")
+        profiles.append(second)
+    else:
+        first.grouping_note = (note + f" (only {len(dropped)} dark frames — too few to "
+                               f"fit their profile; add more for the dark look)")
+    return profiles
+
+
+def learn_profile_adaptive(
+    ref_paths,
+    *,
+    name: str = "untitled",
+    max_dim: int | None = 1024,
+    options: FitOptions | None = None,
+    progress: ProgressFn | None = None,
+) -> LookProfile:
+    """LEARN, adaptive (ADR-0008 b8.5): ONE profile fitted against BOTH lighting groups
+    of a mixed pool simultaneously — the film curve's level machinery reconciles them,
+    so a single LUT treats day and dark scenes each the way the film does. On a
+    single-mood pool this is plain learn_profile."""
+    kept, dropped, _note = group_pool_by_lighting(ref_paths, max_dim=max_dim)
+    if not dropped or len(dropped) < 3:
+        return learn_profile(ref_paths, name=name, max_dim=max_dim,
+                             options=options, progress=progress)
+    targets_a = pool_targets(kept, max_dim=max_dim)
+    targets_b = pool_targets(dropped, max_dim=max_dim)
+    result = fit_film_model(targets_a, options=options, progress=progress,
+                            ref_b=targets_b)
+    profile = LookProfile.from_fit_result(result, name=name)
+    profile.n_frames = len(kept) + len(dropped)
+    profile.grouping_note = (f"adaptive: one profile fitted against both lighting "
+                             f"conditions ({len(kept)} brighter + {len(dropped)} darker "
+                             f"frames)")
+    return profile
+
+
 def render_cube_from_profile(
     profile: LookProfile | FilmModel,
     strength: float = 1.0,
@@ -177,10 +238,15 @@ def validate_baked_cube(cube: Cube, placement: str = "node2") -> ValidationRepor
     """Run the spec §6 stress checks on a baked cube (tone reversals, ΔE smoothness,
     hue-wheel continuity, endpoints) against the placement's reference conversion."""
     ref = _reference_for(placement, cube.size)
+    from lutgen.engine.base import INVERSE_SIZE, load_base_inverse
+    from lutgen.engine.validate import skin_probe_patches
+    # skin probes converted into the cube's input domain (DWG/DI for both placements)
+    skin_di = apply_cube(skin_probe_patches(), load_base_inverse(), INVERSE_SIZE)
     return validate_cube(
         cube.samples, cube.size, ref,
         interp=lambda x: apply_cube(x, cube.samples, cube.size),
         reference_interp=lambda x: apply_cube(x, ref, cube.size),
+        skin_probes=skin_di,
     )
 
 

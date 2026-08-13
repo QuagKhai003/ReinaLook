@@ -68,6 +68,11 @@ for _cf in ("t0", "tc1", "tc2", "tc3", "tc4", "ts1", "ts2", "ts3", "ts4"):
     _SPEC += [("Hue curve — sat coefs", ("hue_fourier", _cf), _cf, -0.25, 0.25, 0.005, _ID)]
 for _cf in ("l0", "lc1", "lc2", "ls1", "ls2"):
     _SPEC += [("Hue curve — brightness mod", ("hue_fourier", _cf), _cf, -0.2, 0.2, 0.005, _ID)]
+for _i, _band in enumerate(("shadow", "dark", "mid", "light", "highlight")):
+    _SPEC += [
+        ("Split tone", ("split_tone", f"t{_i}_a"), f"{_band} a", -0.05, 0.05, 0.001, _ID),
+        ("Split tone", ("split_tone", f"t{_i}_b"), f"{_band} b", -0.05, 0.05, 0.001, _ID),
+    ]
 # Block F film system (ADR-0008): negative → coupling → print
 _SPEC += [
     ("Film system — negative", ("film_system", "negative", "g_r"), "R gamma ×", 0.5, 2.0, 0.005, _ID),

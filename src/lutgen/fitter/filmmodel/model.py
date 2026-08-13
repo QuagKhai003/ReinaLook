@@ -36,6 +36,7 @@ from .globaltrim import GlobalParams, apply_global
 from .huezone import HueZoneParams, apply_hue_zones
 from .satluma import SatLumaParams, apply_sat_luma
 from .scurve import SCurveParams, apply_scurve
+from .splittone import SplitToneParams, apply_split_tone
 
 
 def _identity_curves() -> tuple[SCurveParams, SCurveParams, SCurveParams]:
@@ -58,6 +59,7 @@ class FilmModel:
     global_trim: GlobalParams = field(default_factory=GlobalParams)
     hue_fourier: FourierHueParams = field(default_factory=FourierHueParams)
     film_system: FilmSystemParams = field(default_factory=FilmSystemParams.neutral)
+    split_tone: SplitToneParams = field(default_factory=SplitToneParams)
 
     @classmethod
     def identity(cls) -> FilmModel:
@@ -73,6 +75,7 @@ class FilmModel:
             and self.sat_luma.is_identity()
             and self.hue_zones.is_identity()
             and self.hue_fourier.is_identity()
+            and self.split_tone.is_identity()
         )
 
     def forward(self, rgb: np.ndarray) -> np.ndarray:
@@ -90,8 +93,9 @@ class FilmModel:
             x = apply_film_system(x, self.film_system)    # Block F (neg→print, v3 core)
         x = apply_scurve(x, self.curves)                  # Block B (legacy display curves)
         if not (self.sat_luma.is_identity() and self.hue_zones.is_identity()
-                and self.hue_fourier.is_identity()):
+                and self.hue_fourier.is_identity() and self.split_tone.is_identity()):
             lab = to_oklab(x)                             # code-space Oklab (bounded, sane)
+            lab = apply_split_tone(lab, self.split_tone)  # Block S (shadow/highlight poles)
             lab = apply_sat_luma(lab, self.sat_luma)      # Block C
             lab = apply_hue_zones(lab, self.hue_zones)    # Block D (legacy zones, old profiles)
             lab = apply_fourier_hue(lab, self.hue_fourier)  # Block D v2 (smooth, new fits)

@@ -58,6 +58,7 @@ from lutgen.fitter.filmmodel import (
     NegativeParams,
     PrinterLights,
     PrintParams,
+    SplitToneParams,
     film_print_character,
 )
 from lutgen.orchestration.poolstats import (
@@ -91,12 +92,27 @@ class FitOptions:
     ridge_coupling: float = 0.3  # DIR coupling anchored to the film-print preset (ADR-0008)
     quantile_weight: float = 1.0
     balance_weight: float = 2.0
-    band_balance_weight: float = 3.0  # per-band a/b targets (ADR-0006 A) — the conditional
-                                      # "shadows cool / highlights warm" signal, every stage
+    band_balance_weight: float = 6.0  # per-band a/b targets (ADR-0006 A) — the conditional
+                                      # "shadows cool / highlights warm" signal, every stage.
+                                      # 6.0 (was 3.0, b8.5): the tone-quantile residuals let
+                                      # the pool's pink PALETTE leak in as a +0.02a global
+                                      # cast (magenta skin — user verdict); balance must be
+                                      # able to veto marginal channel pushes
     ridge_exposure: float = 0.4       # ADR-0006 C: plain global darkening must cost more than
                                       # the conditional explanation
     chroma_weight: float = 2.0
-    zone_weight: float = 1.5
+    zone_weight: float = 2.5     # 2.5 (was 1.5, b8.5): skin-family hue angle drifted 9
+                                 # degrees toward magenta with the angles under-weighted —
+                                 # film engineering keeps the skin crossover STABLE
+    # ── the skin contract (b8.5, user requirement: film emulation must ALWAYS protect
+    #    skin) — canonical skin patches ride through every stage's model; drift beyond
+    #    the corridor is hinge-penalized, magenta-ward twice as tightly as warm-ward
+    #    (film may warm skin slightly; it never sends it magenta) ──
+    skin_weight: float = 4.0
+    skin_tol: float = 0.06            # radians (~3.4°) corridor around the POOL'S OWN
+                                      # measured skin hue (look-aware, b8.5 round 5);
+                                      # absolute walls: hue never past 15° magenta,
+                                      # chroma within [0.7x, 1.6x] of the input
     tone_anchor_weight: float = 0.3   # stage 2/3: soft anchor keeping stage-1 tone in place
     max_nfev: int | None = None       # per stage; None = scipy default
     diff_step: float = 0.02           # finite-difference secant step: statistics of a
@@ -106,7 +122,7 @@ class FitOptions:
     tail_weight: float = 2.0          # tone-quantile tail boost: extremes weigh up to this
                                       # factor — film's identity lives at toe/shoulder.
                                       # Primary tone stages only (anchors stay uniform).
-    spread_weight: float = 2.0        # saturation-DISTRIBUTION shape residual (Hasler:
+    spread_weight: float = 1.5        # saturation-DISTRIBUTION shape residual (Hasler:
                                       # punch = tails vs median, level-free ratios) —
                                       # tone + polish stages, where print slope (the punch
                                       # mechanism) is the parameter being fitted
@@ -202,6 +218,63 @@ def synth_samples(targets: PooledTargets, n: int, seed: int = 0) -> np.ndarray:
     return np.clip(from_oklab(lab), 0.0, 1.0)
 
 
+# ── the skin probe set (ADR-0008 b8.5: the skin contract) ─────────────
+# Canonical skin tones in display space: the Oklab skin line (~38°) across light-to-deep
+# lightness and lean-to-rich chroma. Every fit stage pushes these through the model and
+# hinge-penalizes drift out of the corridor — the mathematical form of film engineering's
+# stabilized skin crossover.
+
+def _memory_probes(hue_deg: float, L: np.ndarray, C: np.ndarray) -> np.ndarray:
+    h = np.radians(hue_deg)
+    lab = np.array([[light, c * np.cos(h), c * np.sin(h)] for light in L for c in C])
+    return np.clip(from_oklab(lab), 0.0, 1.0)
+
+
+def _memory_residual(model: FilmModel, probes_di: np.ndarray, hue_target: np.ndarray,
+                     wall_lo: np.ndarray, c0: np.ndarray, fwd,
+                     opt: FitOptions) -> np.ndarray:
+    """The MEMORY-COLOUR contract (b8.5 rounds 5-7): skin AND sky — the colours human
+    perception anchors on, which film engineering deliberately stabilizes. Corridors are
+    LOOK-AWARE (centred on the reference pool's own rendering of that family — one
+    canonical target swapped the test looks' skin personalities). Where the pool never
+    shows the family (``hue_target`` = NaN), the corridor centres on what THE FILM
+    SYSTEM ITSELF (the physically-grounded blocks G/A/F) does to it — the film's math
+    extrapolates the family, and the guard only stops the STATISTICAL blocks (hue curve,
+    split tone) from inventing swings the refs carry no evidence for (user: "the sky
+    should be automatically emulated"). The absolute walls stay: hue never falls below
+    ``wall_lo`` (skin: 15° = true magenta; sky: −125° = violet), chroma within
+    [0.7x, 1.6x] of the input (never grey, never neon)."""
+    out = np.clip(fwd(model.forward(probes_di)), 0.0, 1.0)
+    lab = to_oklab(out)
+    hue = np.arctan2(lab[:, 2], lab[:, 1])
+    c = np.hypot(lab[:, 1], lab[:, 2])
+    if np.isnan(hue_target).any():
+        physical = replace(model, hue_fourier=FourierHueParams(),
+                           split_tone=SplitToneParams())
+        plab = to_oklab(np.clip(fwd(physical.forward(probes_di)), 0.0, 1.0))
+        phys_hue = np.arctan2(plab[:, 2], plab[:, 1])
+        hue_target = np.where(np.isnan(hue_target), phys_hue, hue_target)
+    d = (hue - hue_target + np.pi) % (2.0 * np.pi) - np.pi
+    off = np.maximum(0.0, np.abs(d) - opt.skin_tol)      # track the look's own family
+    wall = np.maximum(0.0, wall_lo - hue)                # absolute hue wall
+    ratio = c / np.maximum(c0, 1e-6)
+    collapse = np.maximum(0.0, 0.7 - ratio)
+    blowup = np.maximum(0.0, ratio - 1.6)
+    return opt.skin_weight * np.concatenate([off, 3.0 * wall, collapse, blowup])
+
+
+def _family_hue(refs: list[PooledTargets], idx: slice) -> float:
+    """The pools' own rendering of a hue family: mass-weighted mean angle of its bins
+    across all conditions, or NaN when the pools barely contain the family (the guard
+    then falls back to the film system's own physical rendering)."""
+    w = sum(r.hue_weight[idx] for r in refs)
+    if float(w.sum()) > 0.02:
+        ab = sum(r.hue_mean_ab[idx] * r.hue_weight[idx][:, None] for r in refs)
+        ab = ab.sum(axis=0) / w.sum()
+        return float(np.arctan2(ab[1], ab[0]))
+    return float("nan")
+
+
 # ── base round-trip (built once per fit) ──────────────────────────────
 
 def _cube_fn(samples: np.ndarray, size: int):
@@ -227,13 +300,19 @@ _FTONE_X0 = np.array([0.0,
                       _PRESET.printer.slope, _PRESET.printer.shoulder, _PRESET.printer.ptoe,
                       0.0, 0.0, 0.0])                   # printer lights r/g/b (stops)
 # physics bounds (research briefs): relative gammas near the LAD window, system contrast
-# 0.9-1.9, convergence strengths in [0, 1) where the softplus knees stay monotone,
-# printer lights within ±0.5 stop per channel (colour timing range)
-_FTONE_LO = np.array([-0.3, 0.70, 0.70, 0.70, 0.0, 0.90, 0.0, 0.0, -0.5, -0.5, -0.5])
-_FTONE_HI = np.array([0.3, 1.35, 1.35, 1.35, 0.8, 1.90, 0.95, 0.95, 0.5, 0.5, 0.5])
+# 0.9-1.8, convergence strengths in [0, 1) where the softplus knees stay monotone,
+# printer lights within ±0.3 stop per channel (colour-timing corrections are modest;
+# ±0.5 let a blue light of +0.38 paint magenta contamination on the first real pool)
+_FTONE_LO = np.array([-0.3, 0.70, 0.70, 0.70, 0.0, 0.90, 0.0, 0.0, -0.3, -0.3, -0.3])
+_FTONE_HI = np.array([0.3, 1.35, 1.35, 1.35, 0.8, 1.80, 0.95, 0.95, 0.3, 0.3, 0.3])
 
 _CT_NEUTRAL = np.zeros(6)
 _CT_LO, _CT_HI = np.full(6, -0.25), np.full(6, 0.25)
+# Block S split tone rides in the crosstalk stage (the balance signal lives there):
+# ct(6) + 5 luminance poles x (a, b). ±0.05 Oklab — the film arch is ~0.02-0.03.
+_CTS_X0 = np.zeros(16)
+_CTS_LO = np.concatenate([_CT_LO, np.full(10, -0.05)])
+_CTS_HI = np.concatenate([_CT_HI, np.full(10, 0.05)])
 
 # hue stage vector: DIR coupling (6 suppression amounts >= 0 — saturation-non-decreasing
 # by construction) + the Fourier hue curve (23 coefs). satluma is RETIRED from the fit
@@ -252,8 +331,15 @@ _COUP_X0 = np.array([(_PRESET.coupling.rg + _PRESET.coupling.gr) / 2,
                      (_PRESET.coupling.gb + _PRESET.coupling.bg) / 2])
 _COUP_LO, _COUP_HI = np.zeros(3), np.full(3, 0.15)
 _HUE_X0 = np.zeros(23)
-_HUE_LO = np.concatenate([-0.12 / _HARM, -0.25 / _HARM, -0.2 / _HARM_L])
-_HUE_HI = np.concatenate([0.12 / _HARM, 0.25 / _HARM, 0.2 / _HARM_L])
+# trim coefs ±0.15/k (was 0.25/k): worst-case per-hue trim sum ≈ ±30% — the physical
+# film range; the wider bound let the red family run +24% on top of the tone stages'
+# gain (the user's "pink/red exaggerated" verdict, b8.5)
+_HUE_LO = np.concatenate([-0.12 / _HARM, -0.15 / _HARM, -0.2 / _HARM_L])
+_HUE_HI = np.concatenate([0.12 / _HARM, 0.15 / _HARM, 0.2 / _HARM_L])
+# s0 rotates the ENTIRE hue wheel — that IS a global cast, not film character (film
+# twists hues locally; the whole-wheel rotation fitted to 5° and painted the user's
+# "whole scope" magenta drift). Capped to ~1.7°; localized coefficients keep their range.
+_HUE_LO[0], _HUE_HI[0] = -0.03, 0.03
 
 
 def _ftone_from_vec(v: np.ndarray, coupling: CouplingParams) -> tuple[GlobalParams, FilmSystemParams]:
@@ -268,6 +354,11 @@ def _ftone_from_vec(v: np.ndarray, coupling: CouplingParams) -> tuple[GlobalPara
 
 def _ct_from_vec(v: np.ndarray) -> CrosstalkParams:
     return CrosstalkParams(rg=v[0], rb=v[1], gr=v[2], gb=v[3], br=v[4], bg=v[5])
+
+
+def _split_from_vec(v: np.ndarray) -> SplitToneParams:
+    names = SplitToneParams().__dict__.keys()
+    return SplitToneParams(**dict(zip(names, v, strict=True)))
 
 
 def _coup_from_vec(v: np.ndarray) -> CouplingParams:
@@ -334,15 +425,13 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
     if spread:
         # saturation-DISTRIBUTION shape (ADR-0008, Hasler): tails relative to the median —
         # the punch statistic the per-band means miss. Level-free ratios (vividness
-        # contract intact). The reference p95 is debiased with the tile estimate (a big
-        # dull region cannot dilute the subject's tail). Fitted in the POLISH stage only:
-        # curve slope is the punch mechanism (sat follows slope — research brief), but the
-        # term is not exposure-invariant en route, so in stage 1 it bent the tone landscape
-        # (satluma dragged to 0.75 compensating), and in stage 3 it drowned the hue
-        # personality signal (corr 0.78 -> 0.46) — both measured in the b8.3 ablations.
-        # Polish is anchored at the settled solution: punch pressure, no re-opening.
-        r_q = ref.sat_quantiles.copy()
-        r_q[-1] = max(r_q[-1], ref.sat_tile_p95)
+        # contract intact). NO tile debias here: on real frames the max-over-tiles p95
+        # reads the single most colourful patch (0.40 vs global 0.23 on the do-revenge
+        # pool) and demanding the whole tail reach it drove the fit 2-4x oversaturated
+        # with every tone param at its rail — the statistic stays for diagnostics only.
+        # Fitted where the punch levers live (tone + polish stages); in stage 3 it
+        # drowned the hue personality signal (corr 0.78 -> 0.46, b8.3 ablation).
+        r_q = ref.sat_quantiles
         r_shape = r_q / max(r_q[1], 1e-9)                # index 1 = the median
         s_shape = s.sat_quantiles / max(s.sat_quantiles[1], 1e-9)
         d = np.delete(s_shape - r_shape, 1)              # median entry is identically 0
@@ -391,29 +480,74 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
 
 def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
                    options: FitOptions | None = None,
-                   progress: ProgressFn | None = None) -> FitResult:
+                   progress: ProgressFn | None = None,
+                   ref_b: PooledTargets | None = None) -> FitResult:
     """Fit a FilmModel so that (base ∘ model ∘ inverse-base) applied to the source world
     reproduces the reference pool's statistics. Staged: tone -> crosstalk -> hue/sat detail,
-    each stage bounded and ridge-pulled toward neutral (per-region regularization)."""
+    each stage bounded and ridge-pulled toward neutral (per-region regularization).
+
+    ADAPTIVE mode (ADR-0008 b8.5): pass ``ref_b`` = a second lighting condition's targets.
+    ONE model is fitted against BOTH conditions simultaneously — each condition gets its
+    own aligned source world, and the film curve's level machinery (knees, split tone,
+    Block E) must reconcile them: one stock, two lights."""
     opt = options or FitOptions()
+
+    def _world_for(r):
+        st = neutral_prior()
+        # the assumed world adopts the POOL's hue-mass structure: constants of the hue
+        # curve (s0, l0 …) are invisible in marginal statistics under a uniform wheel —
+        # peaks are what make them identifiable (ADR-0007).
+        st.hue_weight = r.hue_weight.copy()
+        if opt.exposure_align:
+            st = _exposure_aligned(st, r)
+        return st
+
     if source is not None:
         src_targets = source                      # a real measured pool is never rescaled
     else:
-        src_targets = neutral_prior()
-        # the assumed world adopts the POOL's hue-mass structure: constants of the hue curve
-        # (s0, l0 …) are invisible in marginal statistics under a uniform wheel — peaks are
-        # what make them identifiable. Safe now that no mass residual exists to fight the
-        # shift (that combination was tried and removed — see decisions/LOG).
-        src_targets.hue_weight = ref.hue_weight.copy()
-        if opt.exposure_align:
-            src_targets = _exposure_aligned(src_targets, ref)
+        src_targets = _world_for(ref)
+
+    # Coherence (ADR-0007/0008): with alignment ON, brightness is CONTENT — exposure is
+    # PINNED at 0, not merely ridged. The b8.4 Hunt/spread residuals gave exposure fresh
+    # gradients to exploit (a brighter render measures more colourful), and on the first
+    # real-pool run the fit brightened the whole world +0.18 DI to fake punch; the shipped
+    # look (exposure stripped) then washed — the recurring disease, new variant.
+    pin_exposure = opt.exposure_align and source is None
+    ftone_lo, ftone_hi = _FTONE_LO.copy(), _FTONE_HI.copy()
+    if pin_exposure:
+        ftone_lo[0], ftone_hi[0] = -1e-9, 1e-9           # scipy needs lo < hi strictly
 
     cloud = synth_samples(src_targets, opt.n_samples, opt.seed)
     inv = _cube_fn(load_base_inverse(), INVERSE_SIZE)
     fwd = _cube_fn(load_base(), DEFAULT_SIZE)
-    di_cloud = inv(cloud)                                        # constant across evaluations
+    # conditions: (reference targets, that condition's constant DI source world)
+    conditions = [(ref, inv(cloud))]
+    if ref_b is not None:
+        conditions.append((ref_b, inv(synth_samples(_world_for(ref_b),
+                                                    opt.n_samples, opt.seed))))
 
     result = FitResult(model=FilmModel.identity(), n_frames=ref.n_frames)
+
+    # the memory-colour contract rides through EVERY stage (constant probes, computed
+    # once): skin (bins 15°/45°) + sky (bins −135°..−75°), each corridor centred on the
+    # POOL'S OWN rendering of that family, falling back to the canonical hue when the
+    # pool barely contains it (that fallback is what stops a skyless pool from painting
+    # purple skies).
+    skin_display = _memory_probes(38.0, np.array([0.45, 0.55, 0.65, 0.75]),
+                                  np.array([0.05, 0.08, 0.11]))
+    sky_display = _memory_probes(-105.0, np.array([0.55, 0.70, 0.80]),
+                                 np.array([0.04, 0.08]))
+    mem_display = np.concatenate([skin_display, sky_display])
+    mem_lab0 = to_oklab(mem_display)
+    mem_c0 = np.hypot(mem_lab0[:, 1], mem_lab0[:, 2])
+    mem_di = inv(mem_display)
+    guard_refs = [r for r, _ in conditions]
+    skin_t = _family_hue(guard_refs, slice(6, 8))
+    sky_t = _family_hue(guard_refs, slice(1, 4))
+    n_skin, n_sky = len(skin_display), len(sky_display)
+    mem_target = np.concatenate([np.full(n_skin, skin_t), np.full(n_sky, sky_t)])
+    mem_wall = np.concatenate([np.full(n_skin, np.radians(15.0)),
+                               np.full(n_sky, np.radians(-125.0))])
 
     def run_stage(name, x0, lo, hi, ridge, neutral, model_of, res_kw):
         if progress:
@@ -421,10 +555,12 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
         ridge_v = np.sqrt(np.broadcast_to(np.asarray(ridge, dtype=np.float64), x0.shape))
 
         def f(v):
-            out = fwd(model_of(v).forward(di_cloud))
-            data = _residuals(out, ref, opt, **res_kw)
+            model = model_of(v)
+            parts = [_residuals(fwd(model.forward(dc)), r, opt, **res_kw)
+                     for r, dc in conditions]
+            skin = _memory_residual(model, mem_di, mem_target, mem_wall, mem_c0, fwd, opt)
             reg = ridge_v * (v - neutral)
-            return np.concatenate([data, reg])
+            return np.concatenate([*parts, skin, reg])
 
         sol = least_squares(f, x0, bounds=(lo, hi), method="trf",
                             loss=opt.loss, f_scale=opt.f_scale,
@@ -456,7 +592,7 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     # balance signal into the wrong blocks (crosstalk chased a pure hue twist with -0.08
     # entries — measured).
     tone_v = run_stage(
-        "tone", _FTONE_X0, _FTONE_LO, _FTONE_HI, tone_ridge, _FTONE_X0,
+        "tone", _FTONE_X0, ftone_lo, ftone_hi, tone_ridge, _FTONE_X0,
         lambda v: FilmModel(global_trim=_ftone_from_vec(v, CouplingParams())[0],
                             film_system=_ftone_from_vec(v, CouplingParams())[1]),
         {"tone": True, "balance": True, "chroma": True, "zones": False, "spread": True},
@@ -469,14 +605,19 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
 
     # Stage 2 — crosstalk (Block A: the rendering-primaries mixer in front of the film
     # system — the hue crossovers ARE the look). Tone frozen; quantiles stay a soft anchor.
-    ct_v = run_stage(
-        "crosstalk", _CT_NEUTRAL, _CT_LO, _CT_HI, opt.ridge_crosstalk, _CT_NEUTRAL,
-        lambda v: FilmModel(global_trim=global_trim, crosstalk=_ct_from_vec(v),
-                            film_system=film_system),
+    cts_v = run_stage(
+        "crosstalk", _CTS_X0, _CTS_LO, _CTS_HI, opt.ridge_crosstalk, _CTS_X0,
+        # crosstalk + Block S split tone together: both are driven by the per-band
+        # balance signal — split tone is the non-monotone half (warm darks / cool
+        # highlights) that no channel mixer can express (ADR-0008 b8.5, user verdict)
+        lambda v: FilmModel(global_trim=global_trim, crosstalk=_ct_from_vec(v[:6]),
+                            split_tone=_split_from_vec(v[6:]), film_system=film_system),
         {"tone": True, "balance": True, "chroma": False, "zones": False,
          "tone_weight": opt.tone_anchor_weight},  # hue detail belongs to the Fourier stage
     )
+    ct_v = cts_v[:6]
     crosstalk = _ct_from_vec(ct_v)
+    split_tone = _split_from_vec(cts_v[6:])
 
     # Stage 3 — DIR coupling (F.coupling): the density-domain saturation machinery, fitted
     # against the chroma statistics ONLY. Separate from the hue curve — co-fitting the two
@@ -488,6 +629,7 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
         # hue field as a side effect, so letting it chase balance targets corrupts the
         # hue curve fitted after it — the mean-colour signal belongs to crosstalk.
         lambda v: FilmModel(global_trim=global_trim, crosstalk=crosstalk,
+                            split_tone=split_tone,
                             film_system=_fs_of(tone_v, _coup_from_vec(v))[1]),
         {"tone": True, "balance": False, "chroma": True, "zones": False,
          "tone_weight": opt.tone_anchor_weight},
@@ -521,14 +663,14 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     # G+F tone + crosstalk against the hue-luma targets ("lush vs olive greens") and the
     # spread residual. Anchored at the stage-1/2 solution: refinement, not re-opening.
     p0 = np.concatenate([tone_v, ct_v])
-    p_lo = np.concatenate([_FTONE_LO, _CT_LO])
-    p_hi = np.concatenate([_FTONE_HI, _CT_HI])
+    p_lo = np.concatenate([ftone_lo, _CT_LO])           # exposure stays pinned on the
+    p_hi = np.concatenate([ftone_hi, _CT_HI])           # aligned path through polish
     p_ridge = np.concatenate([np.full(_FTONE_X0.size, 0.3), np.full(6, 0.3)])
 
     def _polish_model(v):
         gt, fs = _fs_of(v[:_FTONE_X0.size], coupling)
         return FilmModel(global_trim=gt, crosstalk=_ct_from_vec(v[_FTONE_X0.size:]),
-                         film_system=fs, hue_fourier=hue_fourier)
+                         split_tone=split_tone, film_system=fs, hue_fourier=hue_fourier)
 
     pol_v = run_stage(
         "polish", p0, p_lo, p_hi, p_ridge, p0,
@@ -539,8 +681,42 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     global_trim, film_system = _fs_of(pol_v[:_FTONE_X0.size], coupling)
     crosstalk = _ct_from_vec(pol_v[_FTONE_X0.size:])
 
+    # Stage 6 — hue re-fit: polish re-tunes tone/crosstalk AFTER the hue curve froze, so
+    # trims tuned against the pre-polish tone go stale — on the first real pool this
+    # DOUBLE-BOOSTED the red family (trim +24% x polish sat gain = user's "pink/red
+    # exaggerated"). Warm-started re-fit of the curve against the final tone.
+    hue_v = run_stage(
+        "huesat", hue_v, _HUE_LO, _HUE_HI, hue_ridge, _HUE_X0,
+        # IDENTICAL residual set to the first huesat pass — same objective, fresher tone
+        # (dropping chroma here sent the recovered twist peak to the wrong side of the
+        # wheel: a different objective finds a different optimum, not a refinement)
+        lambda v: FilmModel(global_trim=global_trim, crosstalk=crosstalk,
+                            split_tone=split_tone,
+                            film_system=film_system, hue_fourier=_hue_from_vec(v)),
+        {"tone": True, "balance": True, "chroma": True, "zones": True,
+         "tone_weight": opt.tone_anchor_weight},
+    )
+    hue_fourier = _hue_from_vec(hue_v)
+
+    # The bake-brightness seam (b8.5): the shape-only default pins fitted exposure to 0,
+    # which left Apply's "Bake film brightness" toggle with nothing to bake. The film's
+    # brightness MOOD is measured directly — the DI offset between the pool's median and
+    # the neutral world's median (the very shift alignment absorbs) — and stored on the
+    # profile. The ship default still strips it (Apply zeroes global_trim unless baking);
+    # the bake path finally applies something real.
+    if pin_exposure:
+        gray = np.linspace(0.0, 1.0, 64)
+        di_gray = inv(np.tile(gray[:, None], (1, 3))).mean(axis=1)
+        pool_med = float(np.interp(0.5, QUANTILES, ref.channel_quantiles.mean(axis=0)))
+        prior_med = float(np.interp(0.5, QUANTILES,
+                                    neutral_prior().channel_quantiles.mean(axis=0)))
+        est = (float(np.interp(pool_med, gray, di_gray))
+               - float(np.interp(prior_med, gray, di_gray)))
+        global_trim = GlobalParams(exposure=float(np.clip(est, -0.3, 0.3)))
+
     result.model = FilmModel(global_trim=global_trim, crosstalk=crosstalk,
-                             film_system=film_system, hue_fourier=hue_fourier)
+                             split_tone=split_tone, film_system=film_system,
+                             hue_fourier=hue_fourier)
     if progress:
         progress("done")
     return result

@@ -37,6 +37,7 @@ from .huezone import HueZoneParams
 from .model import FilmModel
 from .satluma import SatLumaParams
 from .scurve import SCurveParams
+from .splittone import SplitToneParams
 
 # neutral curve params and the fit bounds (recomposition clamps back into them)
 _CURVE_NEUTRAL = {"toe": 0.0, "shoulder": 0.0, "slope": 1.0, "pivot": 0.5}
@@ -112,4 +113,6 @@ def scaled_model(model: FilmModel, tone_amount: float = 1.0,
         hue_zones=hue_zones,
         hue_fourier=hue_fourier,
         film_system=_split_film_system(model.film_system, t, c),
+        split_tone=SplitToneParams(**{k: v * c                    # pure colour: colour dial
+                                      for k, v in asdict(model.split_tone).items()}),
     )

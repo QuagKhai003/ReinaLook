@@ -128,6 +128,16 @@ def _fmt_filmsystem(fs) -> list[str]:
     return rows or ["  neutral"]
 
 
+def _fmt_splittone(st) -> list[str]:
+    if st.is_identity():
+        return ["  neutral"]
+    a, b = st.poles()
+    names = ("shadow", "dark", "mid", "light", "highlight")
+    rows = [f"  {n}: a {va * 1000:+.0f} · b {vb * 1000:+.0f} (‰)"
+            for n, va, vb in zip(names, a, b) if abs(va) > _EPS / 5 or abs(vb) > _EPS / 5]
+    return rows or ["  neutral"]
+
+
 def recipe_summary(profile: LookProfile) -> str:
     """The learned recipe as readable grouped text (near-neutral entries omitted)."""
     m = profile.model
@@ -141,6 +151,8 @@ def recipe_summary(profile: LookProfile) -> str:
     lines += _fmt_curves(m.curves)
     lines.append("Crosstalk")
     lines += _fmt_crosstalk(m.crosstalk)
+    lines.append("Split tone (tint by brightness)")
+    lines += _fmt_splittone(m.split_tone)
     lines.append("Saturation vs luminance")
     lines += _fmt_satluma(m.sat_luma)
     lines.append("Hue zones")

@@ -5,10 +5,12 @@
           fit on a worker thread (per-stage progress + Cancel), reads the learned recipe as
           text, and saves the profile JSON.
 @done     LearnTab widget: pool list + add/remove (tooltips carry full paths), colored
-          frame_count_hint, draft-fit checkbox, threaded learn with stage progress +
-          stage-granular Cancel, recipe summary, save-profile dialog. Pooled-stats cache
-          keyed by the pool (spec §9): re-Learn with unchanged frames skips ingest+stats.
-@todo     Recipe EDITING is 2.3; profile library / Apply side is 2.2.
+          frame_count_hint, adaptive-mode checkbox (one profile for day + dark), threaded
+          learn with stage progress + stage-granular Cancel, per-mood dual profiles on
+          mixed pools, recipe summary, save dialog (-bright/-dark pair). Draft-fit
+          checkbox REMOVED (b8.5, user call) — production always runs the full fit;
+          tests shrink it via the _options_override seam.
+@todo     -
 @limits   GUI-only (Qt); no color math — calls orchestration/learn + profile only. Cancel is
           cooperative at stage boundaries (tone/crosstalk/huesat), granular enough for a
           seconds-long fit.
@@ -21,7 +23,11 @@ from __future__ import annotations
 from PySide6 import QtWidgets
 
 from lutgen.fitter.fit import FitOptions
-from lutgen.orchestration.learn import frame_count_hint, learn_profile, pool_targets
+from lutgen.orchestration.learn import (
+    frame_count_hint,
+    learn_profile_adaptive,
+    learn_profiles_by_lighting,
+)
 from lutgen.orchestration.profile import LookProfile, save_profile
 
 from .recipe import recipe_summary
@@ -53,10 +59,8 @@ class LearnTab(QtWidgets.QWidget):
         self._paths: list[str] = []
         self._profile: LookProfile | None = None
         self._thread: ComputeThread | None = None
+        self._options_override: FitOptions | None = None   # tests shrink the fit here
         self._cancel = False
-        # spec §9 caching: pooled stats recompute only when the POOL changes — a re-Learn
-        # (e.g. draft -> full quality) with the same frames skips ingest + statistics.
-        self._targets_cache: tuple[tuple[str, ...], object] | None = None
         self._build_ui()
         self._update_hint()
 
@@ -72,7 +76,11 @@ class LearnTab(QtWidgets.QWidget):
         self._hint = QtWidgets.QLabel()
         self._hint.setWordWrap(True)
 
-        self._fast = QtWidgets.QCheckBox("Draft fit (quicker, rougher)")
+        self._adaptive = QtWidgets.QCheckBox("Adaptive look (ONE profile for day + dark)")
+        self._adaptive.setToolTip(
+            "A mixed pool normally yields two profiles (bright + dark). Adaptive fits "
+            "a single profile against both conditions at once — the film curve's own "
+            "level response reconciles them, like one film stock under two lights.")
 
         self._learn_btn = QtWidgets.QPushButton("Learn look")
         self._learn_btn.setStyleSheet("font-weight: bold; padding: 6px;")
@@ -103,7 +111,7 @@ class LearnTab(QtWidgets.QWidget):
         lay.addWidget(add_btn)
         lay.addWidget(rm_btn)
         lay.addWidget(self._hint)
-        lay.addWidget(self._fast)
+        lay.addWidget(self._adaptive)
         row = QtWidgets.QHBoxLayout()
         row.addWidget(self._learn_btn, 1)
         row.addWidget(self._cancel_btn)
@@ -148,32 +156,34 @@ class LearnTab(QtWidgets.QWidget):
         if not self._paths or (self._thread is not None and self._thread.isRunning()):
             return
         paths = list(self._paths)
-        options = (FitOptions(n_samples=1200, max_nfev=30, ridge_huesat=0.25)
-                   if self._fast.isChecked() else None)
+        options = self._options_override            # test seam; production always full fit
         self._cancel = False
         self._set_running(True)
 
-        thread = ComputeThread(lambda report: self._fit_payload(paths, options))
+        adaptive = self._adaptive.isChecked()
+        thread = ComputeThread(lambda report: self._fit_payload(paths, options, adaptive))
         thread.stage.connect(self._on_stage)
         thread.done.connect(self._on_done)
         self._thread = thread
         thread.start()
 
-    def _fit_payload(self, paths, options) -> LookProfile:
-        """Worker-thread payload. Stage callback also carries the cooperative cancel."""
+    def _fit_payload(self, paths, options, adaptive=False) -> list[LookProfile]:
+        """Worker-thread payload. Stage callback also carries the cooperative cancel.
+
+        Learns per lighting mood (a mixed pool yields BOTH the bright and the dark
+        profile — the user's footage is usually mixed too). The old precomputed-targets
+        cache bypassed the lighting grouping entirely (mixed pools were blended into
+        neither look); ingest is seconds, correctness wins."""
         def progress(stage: str) -> None:
             if self._cancel:
                 raise Cancelled()
             self._thread.stage.emit(stage)
 
-        key = tuple(paths)
-        if self._targets_cache is not None and self._targets_cache[0] == key:
-            targets = self._targets_cache[1]           # unchanged pool -> skip ingest+stats
-        else:
-            targets = pool_targets(paths)
-            self._targets_cache = (key, targets)
-        return learn_profile(paths, name="untitled", options=options, progress=progress,
-                             targets=targets)
+        if adaptive:
+            return [learn_profile_adaptive(paths, name="untitled", options=options,
+                                           progress=progress)]
+        return learn_profiles_by_lighting(paths, name="untitled", options=options,
+                                          progress=progress)
 
     def _on_stage(self, stage: str) -> None:
         self._stage_lbl.setText(_STAGE_TEXT.get(stage, stage))
@@ -202,11 +212,15 @@ class LearnTab(QtWidgets.QWidget):
         if isinstance(result, Exception):
             QtWidgets.QMessageBox.warning(self, "ReinaLook", f"Could not learn the look:\n{result}")
             return
-        self._profile = result
-        text = recipe_summary(result)
-        if result.grouping_note:
-            text = "NOTE: " + result.grouping_note + "\n\n" + text
-        self._summary.setPlainText(text)
+        profiles = result if isinstance(result, list) else [result]
+        self._profiles = profiles
+        self._profile = profiles[0]
+        parts = []
+        for p in profiles:
+            head = f"— {p.name} —\n" if len(profiles) > 1 else ""
+            note = ("NOTE: " + p.grouping_note + "\n\n") if p.grouping_note else ""
+            parts.append(head + note + recipe_summary(p))
+        self._summary.setPlainText("\n\n".join(parts))
         self._save_btn.setEnabled(True)
 
     # — save —
@@ -215,8 +229,17 @@ class LearnTab(QtWidgets.QWidget):
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save Look Profile", "look.json", "Look Profile (*.json)")
-        if path:
-            from pathlib import Path
-            self._profile.name = Path(path).stem
-            save_profile(path, self._profile)
-            QtWidgets.QMessageBox.information(self, "ReinaLook", f"Saved {path}")
+        if not path:
+            return
+        from pathlib import Path
+        p = Path(path)
+        profiles = getattr(self, "_profiles", None) or [self._profile]
+        saved = []
+        for i, prof in enumerate(profiles):
+            # one profile keeps the chosen name; a mixed-pool pair gets -bright / -dark
+            suffix = "" if len(profiles) == 1 else ("-bright" if i == 0 else "-dark")
+            out = p.with_name(p.stem + suffix + p.suffix)
+            prof.name = out.stem
+            save_profile(str(out), prof)
+            saved.append(str(out))
+        QtWidgets.QMessageBox.information(self, "ReinaLook", "Saved:\n" + "\n".join(saved))
