@@ -14,6 +14,7 @@ Format: `YYYY-MM-DD — <what was decided> — <why, in a few words> (ADR-NNNN i
 
 ---
 
+- 2026-08-13 — docs/ + tests/ now TRACKED in git (user call, reversing the init-time local-only policy): the D: drive failure made the single-point-of-failure cost concrete — project memory and the safety net belong in version control
 - 2026-08-13 — (b8.5) skin corridor asymmetry widened warm-ward (2×→5× tol ≈ 17°): the 6.9° warm corridor vetoed legitimate warm film tints (Block S learned all-zero poles under it); film warms skin freely — only magenta stays hard-blocked at 3.4° (ADR-0008)
 - 2026-08-13 — (b8.5) BLOCK S added — luminance-conditional tint curve (5 Oklab a/b poles aligned to poolstats' L bands): user verdict "adding contrast, not transforming color" — measured: refs paint a warm ARCH (b .005/.026/.032/.027/.019) that every existing block (gammas/crosstalk/lights = monotone drifts) is structurally unable to express (ADR-0008)
 - 2026-08-13 — (b8.5) Block S evolved 2 poles → 3 → 5 measured against band targets (2 poles can't paint an arch; 3 poles misalign with the 5 measurement bands); fitted jointly with crosstalk (the balance-signal stage); colour dial scales it; max band gap 0.020→0.0127 (ADR-0008)
