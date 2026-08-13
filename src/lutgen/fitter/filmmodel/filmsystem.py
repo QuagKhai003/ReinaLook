@@ -8,9 +8,11 @@
           this two-stage model; free statistical maps cannot reproduce it. This block is
           that system, parameterized as DEVIATIONS so neutral params = identity bit-for-bit
           (all existing contracts — sacred strength-0, dials, validator — survive).
-@done     NegativeParams / CouplingParams / PrintParams / FilmSystemParams + apply_film_system
-          on DWG/DI code values; eval helpers for tests/recipe.
-@todo     Character preset vector + FilmModel integration (b8.2); fit wiring (b8.4).
+@done     NegativeParams / CouplingParams / PrintParams / PrinterLights / FilmSystemParams +
+          apply_film_system on DWG/DI code values; eval helpers for tests/recipe. Printer
+          lights (b8.4): per-channel print-stage exposure offsets — the physical colour-
+          timing/cast mechanism; grey stays fixed for every sub-stage EXCEPT lights.
+@todo     -
 @limits   PURE: no IO. Works in STOPS relative to 18% grey (le = log2(lin/0.18)), so a DI
           code offset (Block G / printer lights) composes naturally and every threshold
           parameter (toe_at, range_hi/lo) reads directly in stops. Monotone by
@@ -24,7 +26,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 
 import numpy as np
 
@@ -105,10 +107,26 @@ class PrintParams:
 
 
 @dataclass
+class PrinterLights:
+    """Per-channel printer-light offsets, in STOPS of exposure at the print stage — the
+    physical colour-cast/timing mechanism (Kodak flow: the timer dials R/G/B lights when
+    printing the negative). 0 = neutral. These move grey CHROMATICALLY by design — they
+    are colour, not brightness (overall brightness stays Block G's job)."""
+
+    r: float = 0.0
+    g: float = 0.0
+    b: float = 0.0
+
+    def is_identity(self) -> bool:
+        return self.r == 0.0 and self.g == 0.0 and self.b == 0.0
+
+
+@dataclass
 class FilmSystemParams:
     negative: NegativeParams
     coupling: CouplingParams
     printer: PrintParams
+    lights: PrinterLights = field(default_factory=PrinterLights)
 
     @classmethod
     def neutral(cls) -> FilmSystemParams:
@@ -116,13 +134,13 @@ class FilmSystemParams:
 
     def is_identity(self) -> bool:
         return (self.negative.is_identity() and self.coupling.is_identity()
-                and self.printer.is_identity())
+                and self.printer.is_identity() and self.lights.is_identity())
 
     @classmethod
     def field_names(cls) -> tuple[str, ...]:
         names = []
         for section, klass in (("negative", NegativeParams), ("coupling", CouplingParams),
-                               ("printer", PrintParams)):
+                               ("printer", PrintParams), ("lights", PrinterLights)):
             names += [f"{section}.{f.name}" for f in fields(klass)]
         return tuple(names)
 
@@ -159,8 +177,9 @@ def _from_log_exposure(le: np.ndarray) -> np.ndarray:
 
 def apply_film_system(di_code: np.ndarray, p: FilmSystemParams) -> np.ndarray:
     """The negative→print system on DWG/DI code values. New array; neutral params return the
-    input BIT-FOR-BIT. Grey (18%) is a fixed point of every sub-stage, so overall exposure
-    belongs to Block G / printer lights, not to this block."""
+    input BIT-FOR-BIT. Grey (18%) is a fixed point of every sub-stage EXCEPT printer lights
+    (which move grey chromatically by design — colour timing); overall brightness stays
+    Block G's job."""
     di_code = np.asarray(di_code, dtype=np.float64)
     if di_code.shape[-1] != 3:
         raise ValueError(f"expected (...,3), got {di_code.shape}")
@@ -177,6 +196,10 @@ def apply_film_system(di_code: np.ndarray, p: FilmSystemParams) -> np.ndarray:
     # — coupling: DIR suppression in the density domain (saturation-non-decreasing) —
     if not p.coupling.is_identity():
         d = d @ p.coupling.matrix().T
+
+    # — printer lights: per-channel exposure offsets at the print stage (colour timing) —
+    if not p.lights.is_identity():
+        d = d + np.array([p.lights.r, p.lights.g, p.lights.b])
 
     # — print: system contrast + shared convergence limits (the look) —
     d = d * p.printer.slope
