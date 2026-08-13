@@ -31,6 +31,7 @@ from .huezone import HueZoneParams, apply_hue_zones
 from .model import FilmModel
 from .satluma import SatLumaParams, apply_sat_luma, sat_multiplier
 from .scurve import SCurveParams, apply_scurve
+from .splittone import SplitToneParams, apply_split_tone
 
 __all__ = [
     "CouplingParams",
@@ -45,6 +46,7 @@ __all__ = [
     "PrinterLights",
     "SCurveParams",
     "SatLumaParams",
+    "SplitToneParams",
     "apply_crosstalk",
     "apply_film_system",
     "apply_fourier_hue",
@@ -52,6 +54,7 @@ __all__ = [
     "apply_hue_zones",
     "apply_sat_luma",
     "apply_scurve",
+    "apply_split_tone",
     "crosstalk_matrix",
     "film_print_character",
     "sat_multiplier",

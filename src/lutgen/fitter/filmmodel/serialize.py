@@ -34,6 +34,7 @@ from .huezone import HueZoneParams
 from .model import FilmModel
 from .satluma import SatLumaParams
 from .scurve import SCurveParams
+from .splittone import SplitToneParams
 
 
 def _from_known(cls, data: dict):
@@ -61,6 +62,7 @@ def model_to_dict(model: FilmModel) -> dict:
             "printer": asdict(model.film_system.printer),
             "lights": asdict(model.film_system.lights),
         },
+        "split_tone": asdict(model.split_tone),
     }
 
 
@@ -80,6 +82,7 @@ def model_from_dict(data: dict) -> FilmModel:
             printer=_from_known(PrintParams, fs_d.get("printer", {})),
             lights=_from_known(PrinterLights, fs_d.get("lights", {})),
         ),
+        split_tone=_from_known(SplitToneParams, data.get("split_tone", {})),
         crosstalk=_from_known(CrosstalkParams, data.get("crosstalk", {})),
         curves=(
             _from_known(SCurveParams, curves_d.get("r", {})),

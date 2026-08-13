@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .grid import reshape_to_lattice
-from .perceptual import to_oklab
+from .perceptual import from_oklab, to_oklab
 
 # Monotonicity: grey diagonal is strict (float noise only). The per-axis check works on the
 # SLOPE scale (diff x (size-1); identity slope = 1) per CHANNEL, flagged above 5% of steps:
@@ -45,6 +45,10 @@ _HUE_FLOOR = 0.12
 # what Dehancer ships as its Analog Range Limiter). Measured legit-fit drift: black
 # ~0.10, white 0.14–0.166; the over-driven b8.5 failure case sat at 0.24 — still caught.
 _ENDPOINT_TOL = 0.17
+# Skin corridor (ADR-0008 b8.5): the gate is looser than the fit's own target (8° / x1.6
+# vs 3.4° / x1.35) — it catches broken looks, not style.
+_SKIN_MAGENTA_TOL = 0.14      # ~8° of magenta-ward skin hue drift
+_SKIN_CHROMA_CAP = 1.6
 
 
 @dataclass
@@ -132,8 +136,19 @@ def _max_hue_jump(hues: np.ndarray) -> float:
     return float(d.max())
 
 
+def skin_probe_patches() -> np.ndarray:
+    """Canonical skin patches in DISPLAY space (Oklab skin line ~38°, light-to-deep).
+    Callers convert to their cube's input domain before passing to validate_cube."""
+    L = np.array([0.45, 0.55, 0.65, 0.75])
+    C = np.array([0.05, 0.08, 0.11])
+    h = np.radians(38.0)
+    lab = np.array([[light, c * np.cos(h), c * np.sin(h)] for light in L for c in C])
+    return np.clip(from_oklab(lab), 0.0, 1.0)
+
+
 def validate_cube(samples: np.ndarray, size: int, reference: np.ndarray,
-                  *, interp=None, reference_interp=None) -> ValidationReport:
+                  *, interp=None, reference_interp=None,
+                  skin_probes: np.ndarray | None = None) -> ValidationReport:
     """Run the §6 stress checks on final cube ``samples`` against a ``reference`` cube
     (the base for "node2", the identity grid for "between") whose own behaviour sets the
     thresholds. ``interp``/``reference_interp``: optional ``(N,3)->(N,3)`` cube-sampling
@@ -169,6 +184,31 @@ def validate_cube(samples: np.ndarray, size: int, reference: np.ndarray,
             report.violations.append(Violation(
                 "hue-break", f"hue-wheel sweep jumps {jump:.3f} rad between adjacent hues "
                              f"(limit {limit:.3f}) — hue tears across a zone boundary"))
+
+    # skin corridor (ADR-0008 b8.5, user contract: film emulation ALWAYS protects skin):
+    # canonical skin patches through the cube vs through the reference — hue may warm a
+    # little, must not go magenta; chroma must not blow up. ``skin_probes`` must be given
+    # in the CUBE'S INPUT domain (the caller owns the conversion — feeding display-space
+    # patches to a DI-input cube measures deep shadows, not skin: found the hard way).
+    if skin_probes is not None and interp is not None and reference_interp is not None:
+        skin = np.asarray(skin_probes, dtype=np.float64)
+        out = to_oklab(np.clip(interp(skin), 0.0, 1.0))
+        ref_out = to_oklab(np.clip(reference_interp(skin), 0.0, 1.0))
+        hue_o = np.arctan2(out[:, 2], out[:, 1])
+        hue_r = np.arctan2(ref_out[:, 2], ref_out[:, 1])
+        d = (hue_o - hue_r + np.pi) % (2.0 * np.pi) - np.pi
+        worst_magenta = float(-(d.min()))                 # hue decrease = toward magenta
+        if worst_magenta > _SKIN_MAGENTA_TOL:
+            report.violations.append(Violation(
+                "skin", f"skin hue drifts {np.degrees(worst_magenta):.1f}° toward magenta "
+                        f"(tol {np.degrees(_SKIN_MAGENTA_TOL):.0f}°)"))
+        c_o = np.hypot(out[:, 2], out[:, 1])
+        c_r = np.maximum(np.hypot(ref_out[:, 2], ref_out[:, 1]), 1e-6)
+        worst_blow = float((c_o / c_r).max())
+        if worst_blow > _SKIN_CHROMA_CAP:
+            report.violations.append(Violation(
+                "skin", f"skin chroma grows x{worst_blow:.2f} "
+                        f"(cap x{_SKIN_CHROMA_CAP})"))
 
     # endpoints: black stays black-ish, white stays white-ish (vs the reference's endpoints)
     for idx, name in ((0, "black"), (-1, "white")):

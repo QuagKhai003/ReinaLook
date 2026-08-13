@@ -177,10 +177,15 @@ def validate_baked_cube(cube: Cube, placement: str = "node2") -> ValidationRepor
     """Run the spec §6 stress checks on a baked cube (tone reversals, ΔE smoothness,
     hue-wheel continuity, endpoints) against the placement's reference conversion."""
     ref = _reference_for(placement, cube.size)
+    from lutgen.engine.base import INVERSE_SIZE, load_base_inverse
+    from lutgen.engine.validate import skin_probe_patches
+    # skin probes converted into the cube's input domain (DWG/DI for both placements)
+    skin_di = apply_cube(skin_probe_patches(), load_base_inverse(), INVERSE_SIZE)
     return validate_cube(
         cube.samples, cube.size, ref,
         interp=lambda x: apply_cube(x, cube.samples, cube.size),
         reference_interp=lambda x: apply_cube(x, ref, cube.size),
+        skin_probes=skin_di,
     )
 
 

@@ -1,9 +1,8 @@
 # ── Untracked: planning / workflow / project management ──────────────
-# Per project policy: git tracks CODE only. All planning, workflow, and
-# product-management artifacts stay local (untracked).
+# docs/ and tests/ are TRACKED as of 2026-08-13 (user call after the D: drive
+# failure — local-only meant a single point of failure for the living docs).
 /Plan/
 /dev-workflow-kit/
-/docs/
 /codemap/
 /LUT/
 /CLAUDE.md
@@ -12,9 +11,6 @@
 *.plan.md
 *.notes.md
 /.notes/
-
-# tests are local-only (chosen at init 2026-08-11)
-/tests/
 
 # ── Python ───────────────────────────────────────────────────────────
 __pycache__/
