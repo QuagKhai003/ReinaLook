@@ -5,9 +5,9 @@
 > **This file never grows** — replace, don't append. If it's getting long, you're keeping
 > history in it: move that to `docs/progress/` and trim.
 
-**Last updated:** 2026-08-13 (ADR-0008 COMPLETE — b8.5 merged + pushed, main @ c97627c.
-RELEASE TRACK: clean venv READY, exe rebuild IN FLIGHT (background) (v1 was 508 MB of global-Python bloat — torch/cv2 etc; see LOG); README v2 + 2.0.0 next. Backlog explicitly
-deferred by user except an explanation of outlier down-weighting)
+**Last updated:** 2026-08-13 — **v2.0.0 RELEASED**: GitHub release live with ReinaLook.exe
+(102 MB, clean-venv build) attached — github.com/QuagKhai003/ReinaLook/releases/tag/v2.0.0.
+ADR-0008 complete, main @ 3a3982a. Remaining: README v2 rewrite; user launch test of the exe.
 
 ## Phase
 Phases 1–3 complete + pushed (main @ wash fix 73b31ff). App: Learn / Apply / Match modes,
