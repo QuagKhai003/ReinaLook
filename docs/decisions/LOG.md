@@ -14,6 +14,7 @@ Format: `YYYY-MM-DD — <what was decided> — <why, in a few words> (ADR-NNNN i
 
 ---
 
+- 2026-08-13 — (b8.5) skin contract made LOOK-AWARE: corridor centres on the POOL'S measured skin hue (skin-family bins), not a canonical 38° — one canonical target SWAPPED the two looks' skin personalities (user verdict: do-revenge bright-pale-magenta vs shirley rich-orange rendered inverted); absolute walls stay look-agnostic (never past 15° magenta; chroma in [0.7×, 1.6×]) (ADR-0008)
 - 2026-08-13 — (b8.5) mixed pool now learns BOTH profiles in one run ("name — bright" + "name — dark", saved as -bright/-dark): user's footage is mixed too; one-output-per-learn forced manual frame surgery (ADR-0008)
 - 2026-08-13 — (b8.5) GUI targets-cache BUG fixed: precomputed pool targets bypassed the lighting grouping entirely — the GUI was learning mixed pools blended into neither look; cache removed, correctness over seconds of ingest (ADR-0008)
 - 2026-08-13 — docs/ + tests/ now TRACKED in git (user call, reversing the init-time local-only policy): the D: drive failure made the single-point-of-failure cost concrete — project memory and the safety net belong in version control

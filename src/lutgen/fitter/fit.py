@@ -109,9 +109,10 @@ class FitOptions:
     #    the corridor is hinge-penalized, magenta-ward twice as tightly as warm-ward
     #    (film may warm skin slightly; it never sends it magenta) ──
     skin_weight: float = 4.0
-    skin_tol: float = 0.06            # radians (~3.4°) of allowed hue drift magenta-ward;
-                                      # warm-ward gets 2x this corridor
-    skin_chroma_cap: float = 1.35     # skin chroma may grow at most this factor
+    skin_tol: float = 0.06            # radians (~3.4°) corridor around the POOL'S OWN
+                                      # measured skin hue (look-aware, b8.5 round 5);
+                                      # absolute walls: hue never past 15° magenta,
+                                      # chroma within [0.7x, 1.6x] of the input
     tone_anchor_weight: float = 0.3   # stage 2/3: soft anchor keeping stage-1 tone in place
     max_nfev: int | None = None       # per stage; None = scipy default
     diff_step: float = 0.02           # finite-difference secant step: statistics of a
@@ -231,18 +232,25 @@ def _skin_probes() -> np.ndarray:
     return np.clip(from_oklab(lab), 0.0, 1.0)
 
 
-def _skin_residual(model: FilmModel, skin_di: np.ndarray, skin_hue0: np.ndarray,
+def _skin_residual(model: FilmModel, skin_di: np.ndarray, skin_hue_target: float,
                    skin_c0: np.ndarray, fwd, opt: FitOptions) -> np.ndarray:
+    """The skin contract, LOOK-AWARE (b8.5 round 5): the corridor is centred on the
+    REFERENCE POOL'S own measured skin hue — each film has a skin personality
+    (do-revenge leans bright-magenta-pale, shirley rich warm-orange), and aiming every
+    look at one canonical skin swapped their characters (user verdict). Absolute walls
+    stay look-agnostic: never past 15° (true magenta), chroma never collapses (<0.7x)
+    nor blows up (>1.6x)."""
     out = np.clip(fwd(model.forward(skin_di)), 0.0, 1.0)
     lab = to_oklab(out)
     hue = np.arctan2(lab[:, 2], lab[:, 1])
     c = np.hypot(lab[:, 1], lab[:, 2])
-    d = (hue - skin_hue0 + np.pi) % (2.0 * np.pi) - np.pi
-    magenta = np.maximum(0.0, -d - opt.skin_tol)         # hue decrease = toward magenta
-    warm = np.maximum(0.0, d - 5.0 * opt.skin_tol)       # film warms skin freely (~17°);
-                                                          # only magenta is forbidden
-    blowup = np.maximum(0.0, c / np.maximum(skin_c0, 1e-6) - opt.skin_chroma_cap)
-    return opt.skin_weight * np.concatenate([2.0 * magenta, warm, blowup])
+    d = (hue - skin_hue_target + np.pi) % (2.0 * np.pi) - np.pi
+    off = np.maximum(0.0, np.abs(d) - opt.skin_tol)      # track the look's own skin
+    wall = np.maximum(0.0, np.radians(15.0) - hue)       # absolute magenta wall at 15°
+    ratio = c / np.maximum(skin_c0, 1e-6)
+    collapse = np.maximum(0.0, 0.7 - ratio)              # skin never goes grey
+    blowup = np.maximum(0.0, ratio - 1.6)                # nor neon
+    return opt.skin_weight * np.concatenate([off, 3.0 * wall, collapse, blowup])
 
 
 # ── base round-trip (built once per fit) ──────────────────────────────
@@ -484,12 +492,19 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
 
     result = FitResult(model=FilmModel.identity(), n_frames=ref.n_frames)
 
-    # the skin contract rides through EVERY stage (constant probe set, computed once)
+    # the skin contract rides through EVERY stage (constant probe set, computed once).
+    # The corridor centre is the POOL'S OWN skin hue — measured from the skin-family
+    # bins (15°/45°) when they carry mass, else the canonical input hue.
     skin_display = _skin_probes()
     skin_lab0 = to_oklab(skin_display)
-    skin_hue0 = np.arctan2(skin_lab0[:, 2], skin_lab0[:, 1])
     skin_c0 = np.hypot(skin_lab0[:, 1], skin_lab0[:, 2])
     skin_di = inv(skin_display)
+    w_skin = ref.hue_weight[6:8]
+    if float(w_skin.sum()) > 0.02:
+        ab = (ref.hue_mean_ab[6:8] * w_skin[:, None]).sum(axis=0) / w_skin.sum()
+        skin_hue_target = float(np.arctan2(ab[1], ab[0]))
+    else:
+        skin_hue_target = float(np.arctan2(skin_lab0[:, 2], skin_lab0[:, 1]).mean())
 
     def run_stage(name, x0, lo, hi, ridge, neutral, model_of, res_kw):
         if progress:
@@ -500,7 +515,7 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
             model = model_of(v)
             out = fwd(model.forward(di_cloud))
             data = _residuals(out, ref, opt, **res_kw)
-            skin = _skin_residual(model, skin_di, skin_hue0, skin_c0, fwd, opt)
+            skin = _skin_residual(model, skin_di, skin_hue_target, skin_c0, fwd, opt)
             reg = ridge_v * (v - neutral)
             return np.concatenate([data, skin, reg])
 
