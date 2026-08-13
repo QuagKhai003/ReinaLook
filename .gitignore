@@ -51,3 +51,5 @@ scratch/
 
 *.png
 *.jpg
+# dedicated PyInstaller build env (see packaging/ReinaLook.spec header)
+.venv-build/
