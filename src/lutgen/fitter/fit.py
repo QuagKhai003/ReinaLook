@@ -698,6 +698,22 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     )
     hue_fourier = _hue_from_vec(hue_v)
 
+    # The bake-brightness seam (b8.5): the shape-only default pins fitted exposure to 0,
+    # which left Apply's "Bake film brightness" toggle with nothing to bake. The film's
+    # brightness MOOD is measured directly — the DI offset between the pool's median and
+    # the neutral world's median (the very shift alignment absorbs) — and stored on the
+    # profile. The ship default still strips it (Apply zeroes global_trim unless baking);
+    # the bake path finally applies something real.
+    if pin_exposure:
+        gray = np.linspace(0.0, 1.0, 64)
+        di_gray = inv(np.tile(gray[:, None], (1, 3))).mean(axis=1)
+        pool_med = float(np.interp(0.5, QUANTILES, ref.channel_quantiles.mean(axis=0)))
+        prior_med = float(np.interp(0.5, QUANTILES,
+                                    neutral_prior().channel_quantiles.mean(axis=0)))
+        est = (float(np.interp(pool_med, gray, di_gray))
+               - float(np.interp(prior_med, gray, di_gray)))
+        global_trim = GlobalParams(exposure=float(np.clip(est, -0.3, 0.3)))
+
     result.model = FilmModel(global_trim=global_trim, crosstalk=crosstalk,
                              split_tone=split_tone, film_system=film_system,
                              hue_fourier=hue_fourier)

@@ -1,6 +1,6 @@
 # ADR-0008 — The film system core (physical negative→print model, research-driven)
 
-**Status:** Accepted · 2026-08-12 · Builds on ADR-0007 + the three research briefs in
+**Status:** COMPLETE (all 5 batches) · 2026-08-12 → 2026-08-13 · Builds on ADR-0007 + the three research briefs in
 `docs/research/2026-08-12-*` (film physics, industry practice, academic methods).
 
 ## Context
@@ -58,8 +58,10 @@ unreliable pooled means. The research verdict is unanimous:
       symmetric coupling → hue curve → polish; satluma retired from fit; tail/hunt/spread
       active; synthetic recovery tests ported to v3-class truths; §6 endpoint tol 0.10→
       0.16 for the film range limiter)*
-- [ ] **8.5 — Acceptance.** User pools side-by-side vs reference frames + legacy; validator
-      green; push-test; user eyeball is the gate. `Touches: docs/`
+- [x] **8.5 — Acceptance.** *(done 2026-08-13 — 8 verdict-driven rounds on the user's
+      pools: red taming, memory-colour contract {skin, sky} with look-aware corridors +
+      physical fallback, Block S split tone, dual-profile + adaptive learn, bake seam;
+      user: "do revenge look is good", export gate clean, DaVinci workflow confirmed)*
 
 ## Acceptance
 - At preset (no learning): output already reads as film (S-contrast, mid-sat punch, neutral

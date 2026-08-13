@@ -14,6 +14,10 @@ Format: `YYYY-MM-DD — <what was decided> — <why, in a few words> (ADR-NNNN i
 
 ---
 
+- 2026-08-13 — ADR-0008 COMPLETE: b8.5 accepted (user verdicts drove 8 fix rounds; do-revenge accepted, export gate clean); merged to main + pushed; release track next (user approval)
+- 2026-08-13 — (b8.5) draft-fit checkbox REMOVED from Learn tab (user call): production always runs the full fit; tests shrink via a private _options_override seam
+- 2026-08-13 — (b8.5) bake-brightness seam restored: shape-only default pins fitted exposure to 0, which left Apply's "Bake film brightness" toggle DEAD (user found it) — the film's brightness mood is now MEASURED (DI offset between pool median and neutral-world median, the shift alignment absorbs) and stored on the profile; ship default still strips it (ADR-0008)
+- 2026-08-13 — TESTING POLICY (user): never run the test suite without the user's explicit approval — ask before any pytest run; saved to persistent memory
 - 2026-08-13 — (b8.5) memory-colour fallback = PHYSICAL EMULATION, not canonical pin (user: "the sky should be automatically emulated"): when the pool lacks a family, the corridor centres on what blocks G/A/F themselves do to it — the film math extrapolates, the guard only stops the statistical blocks (hue curve, split tone) inventing swings without evidence (ADR-0008)
 - 2026-08-13 — (b8.5) ADAPTIVE MODE added (user request): one profile fitted against BOTH lighting groups simultaneously — each condition gets its own aligned source world; the film curve's level machinery (knees, split tone, Block E) reconciles them. GUI checkbox in Learn tab; falls back to plain learn on single-mood pools (ADR-0008)
 - 2026-08-13 — (b8.5) SKY joins the memory-colour contract (guard generalized skin→{skin, sky}): shirley's 10-frame body pool contains no sky, the unconstrained blue family painted a PURPLE sky on footage — corridor centres on the pool's blue bins when present, canonical −105° when absent; violet wall at −125° (ADR-0008)

@@ -5,10 +5,12 @@
           fit on a worker thread (per-stage progress + Cancel), reads the learned recipe as
           text, and saves the profile JSON.
 @done     LearnTab widget: pool list + add/remove (tooltips carry full paths), colored
-          frame_count_hint, draft-fit checkbox, threaded learn with stage progress +
-          stage-granular Cancel, recipe summary, save-profile dialog. Pooled-stats cache
-          keyed by the pool (spec §9): re-Learn with unchanged frames skips ingest+stats.
-@todo     Recipe EDITING is 2.3; profile library / Apply side is 2.2.
+          frame_count_hint, adaptive-mode checkbox (one profile for day + dark), threaded
+          learn with stage progress + stage-granular Cancel, per-mood dual profiles on
+          mixed pools, recipe summary, save dialog (-bright/-dark pair). Draft-fit
+          checkbox REMOVED (b8.5, user call) — production always runs the full fit;
+          tests shrink it via the _options_override seam.
+@todo     -
 @limits   GUI-only (Qt); no color math — calls orchestration/learn + profile only. Cancel is
           cooperative at stage boundaries (tone/crosstalk/huesat), granular enough for a
           seconds-long fit.
@@ -57,9 +59,8 @@ class LearnTab(QtWidgets.QWidget):
         self._paths: list[str] = []
         self._profile: LookProfile | None = None
         self._thread: ComputeThread | None = None
+        self._options_override: FitOptions | None = None   # tests shrink the fit here
         self._cancel = False
-        # spec §9 caching: pooled stats recompute only when the POOL changes — a re-Learn
-        # (e.g. draft -> full quality) with the same frames skips ingest + statistics.
         self._build_ui()
         self._update_hint()
 
@@ -75,7 +76,6 @@ class LearnTab(QtWidgets.QWidget):
         self._hint = QtWidgets.QLabel()
         self._hint.setWordWrap(True)
 
-        self._fast = QtWidgets.QCheckBox("Draft fit (quicker, rougher)")
         self._adaptive = QtWidgets.QCheckBox("Adaptive look (ONE profile for day + dark)")
         self._adaptive.setToolTip(
             "A mixed pool normally yields two profiles (bright + dark). Adaptive fits "
@@ -111,7 +111,6 @@ class LearnTab(QtWidgets.QWidget):
         lay.addWidget(add_btn)
         lay.addWidget(rm_btn)
         lay.addWidget(self._hint)
-        lay.addWidget(self._fast)
         lay.addWidget(self._adaptive)
         row = QtWidgets.QHBoxLayout()
         row.addWidget(self._learn_btn, 1)
@@ -157,8 +156,7 @@ class LearnTab(QtWidgets.QWidget):
         if not self._paths or (self._thread is not None and self._thread.isRunning()):
             return
         paths = list(self._paths)
-        options = (FitOptions(n_samples=1200, max_nfev=30, ridge_huesat=0.25)
-                   if self._fast.isChecked() else None)
+        options = self._options_override            # test seam; production always full fit
         self._cancel = False
         self._set_running(True)
 

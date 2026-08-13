@@ -107,7 +107,8 @@ def test_learn_tab_fits_and_saves(app, tmp_path):
     from lutgen.orchestration.profile import save_profile as _  # noqa: F401
     tab = LearnTab()
     _add_paths(tab, _frames(tmp_path, 5))
-    tab._fast.setChecked(True)                          # draft fit keeps the test quick
+    from lutgen.fitter.fit import FitOptions
+    tab._options_override = FitOptions(n_samples=300, max_nfev=6)   # keep the test quick
     tab._launch()
     assert not tab._cancel_btn.isHidden()               # running state (offscreen: isHidden, not isVisible)
     _drain(app, tab)
