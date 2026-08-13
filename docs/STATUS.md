@@ -5,11 +5,9 @@
 > **This file never grows** — replace, don't append. If it's getting long, you're keeping
 > history in it: move that to `docs/progress/` and trim.
 
-**Last updated:** 2026-08-13 (b8.5 round 8b — UNCOMMITTED working tree: bake-brightness
-seam + draft-fit checkbox removal + 2 test recalibrations; commit awaits the user's call
-("run and commit" vs "commit only" — testing policy). Export gate confirmed clean by the
-user. Rounds 1–7 pushed @ f10ec4b. NEXT GATE: user's DaVinci acceptance closes b8.5,
-then merge + release track (exe, README v2, 2.0.0))
+**Last updated:** 2026-08-13 (ADR-0008 COMPLETE — b8.5 merged + pushed, main @ c97627c.
+RELEASE TRACK: PyInstaller exe building; README v2 + version 2.0.0 next. Backlog explicitly
+deferred by user except an explanation of outlier down-weighting)
 
 ## Phase
 Phases 1–3 complete + pushed (main @ wash fix 73b31ff). App: Learn / Apply / Match modes,
