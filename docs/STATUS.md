@@ -5,7 +5,7 @@
 > **This file never grows** — replace, don't append. If it's getting long, you're keeping
 > history in it: move that to `docs/progress/` and trim.
 
-**Last updated:** 2026-08-13 (b8.5 round 4: BLOCK S split-tone built — takes 11/12 sent,
+**Last updated:** 2026-08-13 (b8.5 round 7 — memory-colour contract {skin, sky} w/ physical fallback, adaptive mode shipped, dual-profile learn; earlier: Block S split tone, skin contract. Round 4 recap: BLOCK S split-tone built — takes 11/12 sent,
 colour maps by level; skin warm-corridor widened to 17° (magenta stays 3.4°); working tree
 holds skin contract + Block S + cast fixes on `phase/8.5-acceptance`; commit-gate suite in
 background — commit lands on green; AWAITING user verdict on take 11/12)

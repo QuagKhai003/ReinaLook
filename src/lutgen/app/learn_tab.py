@@ -21,7 +21,11 @@ from __future__ import annotations
 from PySide6 import QtWidgets
 
 from lutgen.fitter.fit import FitOptions
-from lutgen.orchestration.learn import frame_count_hint, learn_profiles_by_lighting
+from lutgen.orchestration.learn import (
+    frame_count_hint,
+    learn_profile_adaptive,
+    learn_profiles_by_lighting,
+)
 from lutgen.orchestration.profile import LookProfile, save_profile
 
 from .recipe import recipe_summary
@@ -72,6 +76,11 @@ class LearnTab(QtWidgets.QWidget):
         self._hint.setWordWrap(True)
 
         self._fast = QtWidgets.QCheckBox("Draft fit (quicker, rougher)")
+        self._adaptive = QtWidgets.QCheckBox("Adaptive look (ONE profile for day + dark)")
+        self._adaptive.setToolTip(
+            "A mixed pool normally yields two profiles (bright + dark). Adaptive fits "
+            "a single profile against both conditions at once — the film curve's own "
+            "level response reconciles them, like one film stock under two lights.")
 
         self._learn_btn = QtWidgets.QPushButton("Learn look")
         self._learn_btn.setStyleSheet("font-weight: bold; padding: 6px;")
@@ -103,6 +112,7 @@ class LearnTab(QtWidgets.QWidget):
         lay.addWidget(rm_btn)
         lay.addWidget(self._hint)
         lay.addWidget(self._fast)
+        lay.addWidget(self._adaptive)
         row = QtWidgets.QHBoxLayout()
         row.addWidget(self._learn_btn, 1)
         row.addWidget(self._cancel_btn)
@@ -152,13 +162,14 @@ class LearnTab(QtWidgets.QWidget):
         self._cancel = False
         self._set_running(True)
 
-        thread = ComputeThread(lambda report: self._fit_payload(paths, options))
+        adaptive = self._adaptive.isChecked()
+        thread = ComputeThread(lambda report: self._fit_payload(paths, options, adaptive))
         thread.stage.connect(self._on_stage)
         thread.done.connect(self._on_done)
         self._thread = thread
         thread.start()
 
-    def _fit_payload(self, paths, options) -> list[LookProfile]:
+    def _fit_payload(self, paths, options, adaptive=False) -> list[LookProfile]:
         """Worker-thread payload. Stage callback also carries the cooperative cancel.
 
         Learns per lighting mood (a mixed pool yields BOTH the bright and the dark
@@ -170,6 +181,9 @@ class LearnTab(QtWidgets.QWidget):
                 raise Cancelled()
             self._thread.stage.emit(stage)
 
+        if adaptive:
+            return [learn_profile_adaptive(paths, name="untitled", options=options,
+                                           progress=progress)]
         return learn_profiles_by_lighting(paths, name="untitled", options=options,
                                           progress=progress)
 

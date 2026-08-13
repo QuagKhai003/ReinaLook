@@ -176,3 +176,45 @@ def test_learn_profile_carries_grouping_note(tmp_path):
     night = _mood_frames(tmp_path, 4, 0.1, "n2")
     prof = learn_profile(day + night, options=FAST)
     assert "mixed lighting" in prof.grouping_note
+
+
+# ── adaptive mode + memory-colour physical fallback (ADR-0008 b8.5 r7) ─
+
+def test_adaptive_single_profile_on_mixed_pool(tmp_path):
+    import numpy as np
+    from PIL import Image
+    from lutgen.orchestration.learn import learn_profile_adaptive
+    rng = np.random.default_rng(0)
+    paths = []
+    for i in range(4):                                   # bright group
+        img = (np.clip(0.62 + rng.normal(0, 0.08, (48, 64, 3)), 0, 1) * 255).astype("uint8")
+        p = tmp_path / f"b{i}.png"; Image.fromarray(img).save(p); paths.append(str(p))
+    for i in range(4):                                   # dark group
+        img = (np.clip(0.18 + rng.normal(0, 0.05, (48, 64, 3)), 0, 1) * 255).astype("uint8")
+        p = tmp_path / f"d{i}.png"; Image.fromarray(img).save(p); paths.append(str(p))
+    from lutgen.fitter.fit import FitOptions
+    prof = learn_profile_adaptive(paths, options=FitOptions(n_samples=300, max_nfev=6))
+    assert "adaptive" in prof.grouping_note
+    assert prof.n_frames == 8
+    out = prof.model.forward(np.random.default_rng(1).uniform(0, 1, (16, 3)))
+    assert np.all(np.isfinite(out))
+
+
+def test_memory_guard_physical_fallback_no_nan():
+    import numpy as np
+    from lutgen.fitter.fit import FitOptions, _memory_residual, _cube_fn, _memory_probes
+    from lutgen.engine.base import DEFAULT_SIZE, INVERSE_SIZE, load_base, load_base_inverse
+    from lutgen.engine.perceptual import to_oklab
+    from lutgen.fitter.filmmodel import FilmModel, film_print_character
+    inv = _cube_fn(load_base_inverse(), INVERSE_SIZE)
+    fwd = _cube_fn(load_base(), DEFAULT_SIZE)
+    probes = _memory_probes(-105.0, np.array([0.6, 0.8]), np.array([0.05]))
+    lab0 = to_oklab(probes)
+    c0 = np.hypot(lab0[:, 1], lab0[:, 2])
+    m = FilmModel(film_system=film_print_character())
+    r = _memory_residual(m, inv(probes), np.full(len(probes), np.nan),
+                         np.full(len(probes), np.radians(-125.0)), c0, fwd, FitOptions())
+    assert np.all(np.isfinite(r))
+    # the physical fallback tracks the film system itself => corridor cost ~0 for a
+    # model whose statistical blocks are neutral
+    assert float(np.abs(r).sum()) < 1e-6

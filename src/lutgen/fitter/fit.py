@@ -233,17 +233,27 @@ def _memory_probes(hue_deg: float, L: np.ndarray, C: np.ndarray) -> np.ndarray:
 def _memory_residual(model: FilmModel, probes_di: np.ndarray, hue_target: np.ndarray,
                      wall_lo: np.ndarray, c0: np.ndarray, fwd,
                      opt: FitOptions) -> np.ndarray:
-    """The MEMORY-COLOUR contract (b8.5 rounds 5-6): skin AND sky — the colours human
+    """The MEMORY-COLOUR contract (b8.5 rounds 5-7): skin AND sky — the colours human
     perception anchors on, which film engineering deliberately stabilizes. Corridors are
     LOOK-AWARE (centred on the reference pool's own rendering of that family — one
-    canonical target swapped the test looks' skin personalities); the absolute walls are
-    not: hue never falls below ``wall_lo`` (skin: 15° = true magenta; sky: −125° = violet
-    — an unconstrained blue family painted a purple sky when the refs contained none),
-    and chroma stays within [0.7x, 1.6x] of the input (never grey, never neon)."""
+    canonical target swapped the test looks' skin personalities). Where the pool never
+    shows the family (``hue_target`` = NaN), the corridor centres on what THE FILM
+    SYSTEM ITSELF (the physically-grounded blocks G/A/F) does to it — the film's math
+    extrapolates the family, and the guard only stops the STATISTICAL blocks (hue curve,
+    split tone) from inventing swings the refs carry no evidence for (user: "the sky
+    should be automatically emulated"). The absolute walls stay: hue never falls below
+    ``wall_lo`` (skin: 15° = true magenta; sky: −125° = violet), chroma within
+    [0.7x, 1.6x] of the input (never grey, never neon)."""
     out = np.clip(fwd(model.forward(probes_di)), 0.0, 1.0)
     lab = to_oklab(out)
     hue = np.arctan2(lab[:, 2], lab[:, 1])
     c = np.hypot(lab[:, 1], lab[:, 2])
+    if np.isnan(hue_target).any():
+        physical = replace(model, hue_fourier=FourierHueParams(),
+                           split_tone=SplitToneParams())
+        plab = to_oklab(np.clip(fwd(physical.forward(probes_di)), 0.0, 1.0))
+        phys_hue = np.arctan2(plab[:, 2], plab[:, 1])
+        hue_target = np.where(np.isnan(hue_target), phys_hue, hue_target)
     d = (hue - hue_target + np.pi) % (2.0 * np.pi) - np.pi
     off = np.maximum(0.0, np.abs(d) - opt.skin_tol)      # track the look's own family
     wall = np.maximum(0.0, wall_lo - hue)                # absolute hue wall
@@ -253,14 +263,16 @@ def _memory_residual(model: FilmModel, probes_di: np.ndarray, hue_target: np.nda
     return opt.skin_weight * np.concatenate([off, 3.0 * wall, collapse, blowup])
 
 
-def _family_hue(ref: PooledTargets, idx: slice, fallback: float) -> float:
-    """The pool's own rendering of a hue family: mass-weighted mean angle of its bins,
-    or ``fallback`` (radians) when the pool barely contains the family."""
-    w = ref.hue_weight[idx]
+def _family_hue(refs: list[PooledTargets], idx: slice) -> float:
+    """The pools' own rendering of a hue family: mass-weighted mean angle of its bins
+    across all conditions, or NaN when the pools barely contain the family (the guard
+    then falls back to the film system's own physical rendering)."""
+    w = sum(r.hue_weight[idx] for r in refs)
     if float(w.sum()) > 0.02:
-        ab = (ref.hue_mean_ab[idx] * w[:, None]).sum(axis=0) / w.sum()
+        ab = sum(r.hue_mean_ab[idx] * r.hue_weight[idx][:, None] for r in refs)
+        ab = ab.sum(axis=0) / w.sum()
         return float(np.arctan2(ab[1], ab[0]))
-    return fallback
+    return float("nan")
 
 
 # ── base round-trip (built once per fit) ──────────────────────────────
@@ -468,22 +480,32 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
 
 def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
                    options: FitOptions | None = None,
-                   progress: ProgressFn | None = None) -> FitResult:
+                   progress: ProgressFn | None = None,
+                   ref_b: PooledTargets | None = None) -> FitResult:
     """Fit a FilmModel so that (base ∘ model ∘ inverse-base) applied to the source world
     reproduces the reference pool's statistics. Staged: tone -> crosstalk -> hue/sat detail,
-    each stage bounded and ridge-pulled toward neutral (per-region regularization)."""
+    each stage bounded and ridge-pulled toward neutral (per-region regularization).
+
+    ADAPTIVE mode (ADR-0008 b8.5): pass ``ref_b`` = a second lighting condition's targets.
+    ONE model is fitted against BOTH conditions simultaneously — each condition gets its
+    own aligned source world, and the film curve's level machinery (knees, split tone,
+    Block E) must reconcile them: one stock, two lights."""
     opt = options or FitOptions()
+
+    def _world_for(r):
+        st = neutral_prior()
+        # the assumed world adopts the POOL's hue-mass structure: constants of the hue
+        # curve (s0, l0 …) are invisible in marginal statistics under a uniform wheel —
+        # peaks are what make them identifiable (ADR-0007).
+        st.hue_weight = r.hue_weight.copy()
+        if opt.exposure_align:
+            st = _exposure_aligned(st, r)
+        return st
+
     if source is not None:
         src_targets = source                      # a real measured pool is never rescaled
     else:
-        src_targets = neutral_prior()
-        # the assumed world adopts the POOL's hue-mass structure: constants of the hue curve
-        # (s0, l0 …) are invisible in marginal statistics under a uniform wheel — peaks are
-        # what make them identifiable. Safe now that no mass residual exists to fight the
-        # shift (that combination was tried and removed — see decisions/LOG).
-        src_targets.hue_weight = ref.hue_weight.copy()
-        if opt.exposure_align:
-            src_targets = _exposure_aligned(src_targets, ref)
+        src_targets = _world_for(ref)
 
     # Coherence (ADR-0007/0008): with alignment ON, brightness is CONTENT — exposure is
     # PINNED at 0, not merely ridged. The b8.4 Hunt/spread residuals gave exposure fresh
@@ -498,7 +520,11 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     cloud = synth_samples(src_targets, opt.n_samples, opt.seed)
     inv = _cube_fn(load_base_inverse(), INVERSE_SIZE)
     fwd = _cube_fn(load_base(), DEFAULT_SIZE)
-    di_cloud = inv(cloud)                                        # constant across evaluations
+    # conditions: (reference targets, that condition's constant DI source world)
+    conditions = [(ref, inv(cloud))]
+    if ref_b is not None:
+        conditions.append((ref_b, inv(synth_samples(_world_for(ref_b),
+                                                    opt.n_samples, opt.seed))))
 
     result = FitResult(model=FilmModel.identity(), n_frames=ref.n_frames)
 
@@ -515,8 +541,9 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     mem_lab0 = to_oklab(mem_display)
     mem_c0 = np.hypot(mem_lab0[:, 1], mem_lab0[:, 2])
     mem_di = inv(mem_display)
-    skin_t = _family_hue(ref, slice(6, 8), np.radians(38.0))
-    sky_t = _family_hue(ref, slice(1, 4), np.radians(-105.0))
+    guard_refs = [r for r, _ in conditions]
+    skin_t = _family_hue(guard_refs, slice(6, 8))
+    sky_t = _family_hue(guard_refs, slice(1, 4))
     n_skin, n_sky = len(skin_display), len(sky_display)
     mem_target = np.concatenate([np.full(n_skin, skin_t), np.full(n_sky, sky_t)])
     mem_wall = np.concatenate([np.full(n_skin, np.radians(15.0)),
@@ -529,11 +556,11 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
 
         def f(v):
             model = model_of(v)
-            out = fwd(model.forward(di_cloud))
-            data = _residuals(out, ref, opt, **res_kw)
+            parts = [_residuals(fwd(model.forward(dc)), r, opt, **res_kw)
+                     for r, dc in conditions]
             skin = _memory_residual(model, mem_di, mem_target, mem_wall, mem_c0, fwd, opt)
             reg = ridge_v * (v - neutral)
-            return np.concatenate([data, skin, reg])
+            return np.concatenate([*parts, skin, reg])
 
         sol = least_squares(f, x0, bounds=(lo, hi), method="trf",
                             loss=opt.loss, f_scale=opt.f_scale,

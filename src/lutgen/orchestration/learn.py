@@ -170,6 +170,34 @@ def learn_profiles_by_lighting(
     return profiles
 
 
+def learn_profile_adaptive(
+    ref_paths,
+    *,
+    name: str = "untitled",
+    max_dim: int | None = 1024,
+    options: FitOptions | None = None,
+    progress: ProgressFn | None = None,
+) -> LookProfile:
+    """LEARN, adaptive (ADR-0008 b8.5): ONE profile fitted against BOTH lighting groups
+    of a mixed pool simultaneously — the film curve's level machinery reconciles them,
+    so a single LUT treats day and dark scenes each the way the film does. On a
+    single-mood pool this is plain learn_profile."""
+    kept, dropped, _note = group_pool_by_lighting(ref_paths, max_dim=max_dim)
+    if not dropped or len(dropped) < 3:
+        return learn_profile(ref_paths, name=name, max_dim=max_dim,
+                             options=options, progress=progress)
+    targets_a = pool_targets(kept, max_dim=max_dim)
+    targets_b = pool_targets(dropped, max_dim=max_dim)
+    result = fit_film_model(targets_a, options=options, progress=progress,
+                            ref_b=targets_b)
+    profile = LookProfile.from_fit_result(result, name=name)
+    profile.n_frames = len(kept) + len(dropped)
+    profile.grouping_note = (f"adaptive: one profile fitted against both lighting "
+                             f"conditions ({len(kept)} brighter + {len(dropped)} darker "
+                             f"frames)")
+    return profile
+
+
 def render_cube_from_profile(
     profile: LookProfile | FilmModel,
     strength: float = 1.0,
