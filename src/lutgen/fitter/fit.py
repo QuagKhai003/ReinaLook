@@ -253,8 +253,11 @@ _COUP_X0 = np.array([(_PRESET.coupling.rg + _PRESET.coupling.gr) / 2,
                      (_PRESET.coupling.gb + _PRESET.coupling.bg) / 2])
 _COUP_LO, _COUP_HI = np.zeros(3), np.full(3, 0.15)
 _HUE_X0 = np.zeros(23)
-_HUE_LO = np.concatenate([-0.12 / _HARM, -0.25 / _HARM, -0.2 / _HARM_L])
-_HUE_HI = np.concatenate([0.12 / _HARM, 0.25 / _HARM, 0.2 / _HARM_L])
+# trim coefs ±0.15/k (was 0.25/k): worst-case per-hue trim sum ≈ ±30% — the physical
+# film range; the wider bound let the red family run +24% on top of the tone stages'
+# gain (the user's "pink/red exaggerated" verdict, b8.5)
+_HUE_LO = np.concatenate([-0.12 / _HARM, -0.15 / _HARM, -0.2 / _HARM_L])
+_HUE_HI = np.concatenate([0.12 / _HARM, 0.15 / _HARM, 0.2 / _HARM_L])
 
 
 def _ftone_from_vec(v: np.ndarray, coupling: CouplingParams) -> tuple[GlobalParams, FilmSystemParams]:
@@ -547,6 +550,22 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     )
     global_trim, film_system = _fs_of(pol_v[:_FTONE_X0.size], coupling)
     crosstalk = _ct_from_vec(pol_v[_FTONE_X0.size:])
+
+    # Stage 6 — hue re-fit: polish re-tunes tone/crosstalk AFTER the hue curve froze, so
+    # trims tuned against the pre-polish tone go stale — on the first real pool this
+    # DOUBLE-BOOSTED the red family (trim +24% x polish sat gain = user's "pink/red
+    # exaggerated"). Warm-started re-fit of the curve against the final tone.
+    hue_v = run_stage(
+        "huesat", hue_v, _HUE_LO, _HUE_HI, hue_ridge, _HUE_X0,
+        # IDENTICAL residual set to the first huesat pass — same objective, fresher tone
+        # (dropping chroma here sent the recovered twist peak to the wrong side of the
+        # wheel: a different objective finds a different optimum, not a refinement)
+        lambda v: FilmModel(global_trim=global_trim, crosstalk=crosstalk,
+                            film_system=film_system, hue_fourier=_hue_from_vec(v)),
+        {"tone": True, "balance": True, "chroma": True, "zones": True,
+         "tone_weight": opt.tone_anchor_weight},
+    )
+    hue_fourier = _hue_from_vec(hue_v)
 
     result.model = FilmModel(global_trim=global_trim, crosstalk=crosstalk,
                              film_system=film_system, hue_fourier=hue_fourier)

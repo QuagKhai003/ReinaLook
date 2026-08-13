@@ -40,11 +40,11 @@ _DE_FLOOR = 0.05
 _HUE_FACTOR = 3.0
 _HUE_FLOOR = 0.12
 # Endpoints: output black/white may drift from the reference endpoints by at most this (per ch).
-# 0.16 (was 0.10): a film print's range is NARROWER than the conversion's by design —
+# 0.17 (was 0.10): a film print's range is NARROWER than the conversion's by design —
 # blacks converge at D-max above pure black, whites roll off toward paper-white (ADR-0008;
-# what Dehancer ships as its Analog Range Limiter). Measured film-preset drift: black
-# ~0.10, white ~0.14. Wild fits drift far beyond this; the guard still catches them.
-_ENDPOINT_TOL = 0.16
+# what Dehancer ships as its Analog Range Limiter). Measured legit-fit drift: black
+# ~0.10, white 0.14–0.166; the over-driven b8.5 failure case sat at 0.24 — still caught.
+_ENDPOINT_TOL = 0.17
 
 
 @dataclass
