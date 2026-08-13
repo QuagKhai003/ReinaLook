@@ -6,7 +6,7 @@
 > history in it: move that to `docs/progress/` and trim.
 
 **Last updated:** 2026-08-13 (ADR-0008 COMPLETE — b8.5 merged + pushed, main @ c97627c.
-RELEASE TRACK: PyInstaller exe building; README v2 + version 2.0.0 next. Backlog explicitly
+RELEASE TRACK: `dist/ReinaLook.exe` BUILT (508 MB, awaiting user launch test); README v2 + version 2.0.0 next. Backlog explicitly
 deferred by user except an explanation of outlier down-weighting)
 
 ## Phase
