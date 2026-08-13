@@ -106,7 +106,7 @@ class FitOptions:
     tail_weight: float = 2.0          # tone-quantile tail boost: extremes weigh up to this
                                       # factor — film's identity lives at toe/shoulder.
                                       # Primary tone stages only (anchors stay uniform).
-    spread_weight: float = 2.0        # saturation-DISTRIBUTION shape residual (Hasler:
+    spread_weight: float = 1.5        # saturation-DISTRIBUTION shape residual (Hasler:
                                       # punch = tails vs median, level-free ratios) —
                                       # tone + polish stages, where print slope (the punch
                                       # mechanism) is the parameter being fitted
@@ -227,10 +227,11 @@ _FTONE_X0 = np.array([0.0,
                       _PRESET.printer.slope, _PRESET.printer.shoulder, _PRESET.printer.ptoe,
                       0.0, 0.0, 0.0])                   # printer lights r/g/b (stops)
 # physics bounds (research briefs): relative gammas near the LAD window, system contrast
-# 0.9-1.9, convergence strengths in [0, 1) where the softplus knees stay monotone,
-# printer lights within ±0.5 stop per channel (colour timing range)
-_FTONE_LO = np.array([-0.3, 0.70, 0.70, 0.70, 0.0, 0.90, 0.0, 0.0, -0.5, -0.5, -0.5])
-_FTONE_HI = np.array([0.3, 1.35, 1.35, 1.35, 0.8, 1.90, 0.95, 0.95, 0.5, 0.5, 0.5])
+# 0.9-1.8, convergence strengths in [0, 1) where the softplus knees stay monotone,
+# printer lights within ±0.3 stop per channel (colour-timing corrections are modest;
+# ±0.5 let a blue light of +0.38 paint magenta contamination on the first real pool)
+_FTONE_LO = np.array([-0.3, 0.70, 0.70, 0.70, 0.0, 0.90, 0.0, 0.0, -0.3, -0.3, -0.3])
+_FTONE_HI = np.array([0.3, 1.35, 1.35, 1.35, 0.8, 1.80, 0.95, 0.95, 0.3, 0.3, 0.3])
 
 _CT_NEUTRAL = np.zeros(6)
 _CT_LO, _CT_HI = np.full(6, -0.25), np.full(6, 0.25)
@@ -334,15 +335,13 @@ def _residuals(out_display: np.ndarray, ref: PooledTargets, opt: FitOptions,
     if spread:
         # saturation-DISTRIBUTION shape (ADR-0008, Hasler): tails relative to the median —
         # the punch statistic the per-band means miss. Level-free ratios (vividness
-        # contract intact). The reference p95 is debiased with the tile estimate (a big
-        # dull region cannot dilute the subject's tail). Fitted in the POLISH stage only:
-        # curve slope is the punch mechanism (sat follows slope — research brief), but the
-        # term is not exposure-invariant en route, so in stage 1 it bent the tone landscape
-        # (satluma dragged to 0.75 compensating), and in stage 3 it drowned the hue
-        # personality signal (corr 0.78 -> 0.46) — both measured in the b8.3 ablations.
-        # Polish is anchored at the settled solution: punch pressure, no re-opening.
-        r_q = ref.sat_quantiles.copy()
-        r_q[-1] = max(r_q[-1], ref.sat_tile_p95)
+        # contract intact). NO tile debias here: on real frames the max-over-tiles p95
+        # reads the single most colourful patch (0.40 vs global 0.23 on the do-revenge
+        # pool) and demanding the whole tail reach it drove the fit 2-4x oversaturated
+        # with every tone param at its rail — the statistic stays for diagnostics only.
+        # Fitted where the punch levers live (tone + polish stages); in stage 3 it
+        # drowned the hue personality signal (corr 0.78 -> 0.46, b8.3 ablation).
+        r_q = ref.sat_quantiles
         r_shape = r_q / max(r_q[1], 1e-9)                # index 1 = the median
         s_shape = s.sat_quantiles / max(s.sat_quantiles[1], 1e-9)
         d = np.delete(s_shape - r_shape, 1)              # median entry is identically 0
@@ -408,6 +407,16 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
         if opt.exposure_align:
             src_targets = _exposure_aligned(src_targets, ref)
 
+    # Coherence (ADR-0007/0008): with alignment ON, brightness is CONTENT — exposure is
+    # PINNED at 0, not merely ridged. The b8.4 Hunt/spread residuals gave exposure fresh
+    # gradients to exploit (a brighter render measures more colourful), and on the first
+    # real-pool run the fit brightened the whole world +0.18 DI to fake punch; the shipped
+    # look (exposure stripped) then washed — the recurring disease, new variant.
+    pin_exposure = opt.exposure_align and source is None
+    ftone_lo, ftone_hi = _FTONE_LO.copy(), _FTONE_HI.copy()
+    if pin_exposure:
+        ftone_lo[0], ftone_hi[0] = -1e-9, 1e-9           # scipy needs lo < hi strictly
+
     cloud = synth_samples(src_targets, opt.n_samples, opt.seed)
     inv = _cube_fn(load_base_inverse(), INVERSE_SIZE)
     fwd = _cube_fn(load_base(), DEFAULT_SIZE)
@@ -456,7 +465,7 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     # balance signal into the wrong blocks (crosstalk chased a pure hue twist with -0.08
     # entries — measured).
     tone_v = run_stage(
-        "tone", _FTONE_X0, _FTONE_LO, _FTONE_HI, tone_ridge, _FTONE_X0,
+        "tone", _FTONE_X0, ftone_lo, ftone_hi, tone_ridge, _FTONE_X0,
         lambda v: FilmModel(global_trim=_ftone_from_vec(v, CouplingParams())[0],
                             film_system=_ftone_from_vec(v, CouplingParams())[1]),
         {"tone": True, "balance": True, "chroma": True, "zones": False, "spread": True},
@@ -521,8 +530,8 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
     # G+F tone + crosstalk against the hue-luma targets ("lush vs olive greens") and the
     # spread residual. Anchored at the stage-1/2 solution: refinement, not re-opening.
     p0 = np.concatenate([tone_v, ct_v])
-    p_lo = np.concatenate([_FTONE_LO, _CT_LO])
-    p_hi = np.concatenate([_FTONE_HI, _CT_HI])
+    p_lo = np.concatenate([ftone_lo, _CT_LO])           # exposure stays pinned on the
+    p_hi = np.concatenate([ftone_hi, _CT_HI])           # aligned path through polish
     p_ridge = np.concatenate([np.full(_FTONE_X0.size, 0.3), np.full(6, 0.3)])
 
     def _polish_model(v):
