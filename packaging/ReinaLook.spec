@@ -31,10 +31,21 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "pytest"],
+    # Anything not on the app's real dependency tree is excluded outright — the first
+    # build ran against a global Python and swallowed torch (251 MB), cv2 (99 MB),
+    # pyarrow, onnxruntime, av, nltk, pandas, matplotlib (colour.plotting pulls it).
+    excludes=["tkinter", "pytest", "matplotlib", "pandas", "torch", "cv2", "pyarrow",
+              "onnxruntime", "av", "nltk", "blis", "IPython", "jupyter",
+              "colour.examples", "colour.plotting"],
     cipher=block_cipher,
     noarchive=False,
 )
+# Trim Qt fat the hook over-includes: the 20 MB software-OpenGL fallback (any machine
+# running Resolve has real GL) and the translation catalogues.
+a.binaries = [b for b in a.binaries if "opengl32sw" not in b[0].lower()]
+a.datas = [d for d in a.datas if "\\translations\\" not in d[0].lower()
+           and "/translations/" not in d[0].lower()]
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

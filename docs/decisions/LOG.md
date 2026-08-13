@@ -14,6 +14,7 @@ Format: `YYYY-MM-DD — <what was decided> — <why, in a few words> (ADR-NNNN i
 
 ---
 
+- 2026-08-13 — exe bloat root-caused: built against the GLOBAL Python — PyInstaller swallowed torch (251 MB), cv2 (99 MB), pyarrow/onnxruntime/av/nltk/pandas/matplotlib (colour.plotting chain). Fix: dedicated clean build venv (.venv-build, gui deps only) + hard excludes in the spec + Qt trims (software-GL fallback, translations); expect ~150-200 MB
 - 2026-08-13 — ADR-0008 COMPLETE: b8.5 accepted (user verdicts drove 8 fix rounds; do-revenge accepted, export gate clean); merged to main + pushed; release track next (user approval)
 - 2026-08-13 — (b8.5) draft-fit checkbox REMOVED from Learn tab (user call): production always runs the full fit; tests shrink via a private _options_override seam
 - 2026-08-13 — (b8.5) bake-brightness seam restored: shape-only default pins fitted exposure to 0, which left Apply's "Bake film brightness" toggle DEAD (user found it) — the film's brightness mood is now MEASURED (DI offset between pool median and neutral-world median, the shift alignment absorbs) and stored on the profile; ship default still strips it (ADR-0008)

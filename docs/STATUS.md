@@ -6,7 +6,7 @@
 > history in it: move that to `docs/progress/` and trim.
 
 **Last updated:** 2026-08-13 (ADR-0008 COMPLETE — b8.5 merged + pushed, main @ c97627c.
-RELEASE TRACK: `dist/ReinaLook.exe` BUILT (508 MB, awaiting user launch test); README v2 + version 2.0.0 next. Backlog explicitly
+RELEASE TRACK: clean venv READY, exe rebuild IN FLIGHT (background) (v1 was 508 MB of global-Python bloat — torch/cv2 etc; see LOG); README v2 + 2.0.0 next. Backlog explicitly
 deferred by user except an explanation of outlier down-weighting)
 
 ## Phase
