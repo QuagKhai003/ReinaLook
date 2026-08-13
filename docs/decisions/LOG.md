@@ -14,6 +14,8 @@ Format: `YYYY-MM-DD — <what was decided> — <why, in a few words> (ADR-NNNN i
 
 ---
 
+- 2026-08-13 — (b8.5) SKY joins the memory-colour contract (guard generalized skin→{skin, sky}): shirley's 10-frame body pool contains no sky, the unconstrained blue family painted a PURPLE sky on footage — corridor centres on the pool's blue bins when present, canonical −105° when absent; violet wall at −125° (ADR-0008)
+- 2026-08-13 — (b8.5) shirley's grey-out root: auto-grouping's prefer-brighter rule picked 3 pale outlier frames over the 10-frame body (slope collapsed to 1.09, coupling ≈ 0); the DARK-group profile carries the real look — dual-profile output covers it, user picks by eye (ADR-0008)
 - 2026-08-13 — (b8.5) skin contract made LOOK-AWARE: corridor centres on the POOL'S measured skin hue (skin-family bins), not a canonical 38° — one canonical target SWAPPED the two looks' skin personalities (user verdict: do-revenge bright-pale-magenta vs shirley rich-orange rendered inverted); absolute walls stay look-agnostic (never past 15° magenta; chroma in [0.7×, 1.6×]) (ADR-0008)
 - 2026-08-13 — (b8.5) mixed pool now learns BOTH profiles in one run ("name — bright" + "name — dark", saved as -bright/-dark): user's footage is mixed too; one-output-per-learn forced manual frame surgery (ADR-0008)
 - 2026-08-13 — (b8.5) GUI targets-cache BUG fixed: precomputed pool targets bypassed the lighting grouping entirely — the GUI was learning mixed pools blended into neither look; cache removed, correctness over seconds of ingest (ADR-0008)

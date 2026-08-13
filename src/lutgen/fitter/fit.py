@@ -224,33 +224,43 @@ def synth_samples(targets: PooledTargets, n: int, seed: int = 0) -> np.ndarray:
 # hinge-penalizes drift out of the corridor — the mathematical form of film engineering's
 # stabilized skin crossover.
 
-def _skin_probes() -> np.ndarray:
-    L = np.array([0.45, 0.55, 0.65, 0.75])
-    C = np.array([0.05, 0.08, 0.11])
-    h = np.radians(38.0)
-    lab = np.array([[l, c * np.cos(h), c * np.sin(h)] for l in L for c in C])
+def _memory_probes(hue_deg: float, L: np.ndarray, C: np.ndarray) -> np.ndarray:
+    h = np.radians(hue_deg)
+    lab = np.array([[light, c * np.cos(h), c * np.sin(h)] for light in L for c in C])
     return np.clip(from_oklab(lab), 0.0, 1.0)
 
 
-def _skin_residual(model: FilmModel, skin_di: np.ndarray, skin_hue_target: float,
-                   skin_c0: np.ndarray, fwd, opt: FitOptions) -> np.ndarray:
-    """The skin contract, LOOK-AWARE (b8.5 round 5): the corridor is centred on the
-    REFERENCE POOL'S own measured skin hue — each film has a skin personality
-    (do-revenge leans bright-magenta-pale, shirley rich warm-orange), and aiming every
-    look at one canonical skin swapped their characters (user verdict). Absolute walls
-    stay look-agnostic: never past 15° (true magenta), chroma never collapses (<0.7x)
-    nor blows up (>1.6x)."""
-    out = np.clip(fwd(model.forward(skin_di)), 0.0, 1.0)
+def _memory_residual(model: FilmModel, probes_di: np.ndarray, hue_target: np.ndarray,
+                     wall_lo: np.ndarray, c0: np.ndarray, fwd,
+                     opt: FitOptions) -> np.ndarray:
+    """The MEMORY-COLOUR contract (b8.5 rounds 5-6): skin AND sky — the colours human
+    perception anchors on, which film engineering deliberately stabilizes. Corridors are
+    LOOK-AWARE (centred on the reference pool's own rendering of that family — one
+    canonical target swapped the test looks' skin personalities); the absolute walls are
+    not: hue never falls below ``wall_lo`` (skin: 15° = true magenta; sky: −125° = violet
+    — an unconstrained blue family painted a purple sky when the refs contained none),
+    and chroma stays within [0.7x, 1.6x] of the input (never grey, never neon)."""
+    out = np.clip(fwd(model.forward(probes_di)), 0.0, 1.0)
     lab = to_oklab(out)
     hue = np.arctan2(lab[:, 2], lab[:, 1])
     c = np.hypot(lab[:, 1], lab[:, 2])
-    d = (hue - skin_hue_target + np.pi) % (2.0 * np.pi) - np.pi
-    off = np.maximum(0.0, np.abs(d) - opt.skin_tol)      # track the look's own skin
-    wall = np.maximum(0.0, np.radians(15.0) - hue)       # absolute magenta wall at 15°
-    ratio = c / np.maximum(skin_c0, 1e-6)
-    collapse = np.maximum(0.0, 0.7 - ratio)              # skin never goes grey
-    blowup = np.maximum(0.0, ratio - 1.6)                # nor neon
+    d = (hue - hue_target + np.pi) % (2.0 * np.pi) - np.pi
+    off = np.maximum(0.0, np.abs(d) - opt.skin_tol)      # track the look's own family
+    wall = np.maximum(0.0, wall_lo - hue)                # absolute hue wall
+    ratio = c / np.maximum(c0, 1e-6)
+    collapse = np.maximum(0.0, 0.7 - ratio)
+    blowup = np.maximum(0.0, ratio - 1.6)
     return opt.skin_weight * np.concatenate([off, 3.0 * wall, collapse, blowup])
+
+
+def _family_hue(ref: PooledTargets, idx: slice, fallback: float) -> float:
+    """The pool's own rendering of a hue family: mass-weighted mean angle of its bins,
+    or ``fallback`` (radians) when the pool barely contains the family."""
+    w = ref.hue_weight[idx]
+    if float(w.sum()) > 0.02:
+        ab = (ref.hue_mean_ab[idx] * w[:, None]).sum(axis=0) / w.sum()
+        return float(np.arctan2(ab[1], ab[0]))
+    return fallback
 
 
 # ── base round-trip (built once per fit) ──────────────────────────────
@@ -492,19 +502,25 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
 
     result = FitResult(model=FilmModel.identity(), n_frames=ref.n_frames)
 
-    # the skin contract rides through EVERY stage (constant probe set, computed once).
-    # The corridor centre is the POOL'S OWN skin hue — measured from the skin-family
-    # bins (15°/45°) when they carry mass, else the canonical input hue.
-    skin_display = _skin_probes()
-    skin_lab0 = to_oklab(skin_display)
-    skin_c0 = np.hypot(skin_lab0[:, 1], skin_lab0[:, 2])
-    skin_di = inv(skin_display)
-    w_skin = ref.hue_weight[6:8]
-    if float(w_skin.sum()) > 0.02:
-        ab = (ref.hue_mean_ab[6:8] * w_skin[:, None]).sum(axis=0) / w_skin.sum()
-        skin_hue_target = float(np.arctan2(ab[1], ab[0]))
-    else:
-        skin_hue_target = float(np.arctan2(skin_lab0[:, 2], skin_lab0[:, 1]).mean())
+    # the memory-colour contract rides through EVERY stage (constant probes, computed
+    # once): skin (bins 15°/45°) + sky (bins −135°..−75°), each corridor centred on the
+    # POOL'S OWN rendering of that family, falling back to the canonical hue when the
+    # pool barely contains it (that fallback is what stops a skyless pool from painting
+    # purple skies).
+    skin_display = _memory_probes(38.0, np.array([0.45, 0.55, 0.65, 0.75]),
+                                  np.array([0.05, 0.08, 0.11]))
+    sky_display = _memory_probes(-105.0, np.array([0.55, 0.70, 0.80]),
+                                 np.array([0.04, 0.08]))
+    mem_display = np.concatenate([skin_display, sky_display])
+    mem_lab0 = to_oklab(mem_display)
+    mem_c0 = np.hypot(mem_lab0[:, 1], mem_lab0[:, 2])
+    mem_di = inv(mem_display)
+    skin_t = _family_hue(ref, slice(6, 8), np.radians(38.0))
+    sky_t = _family_hue(ref, slice(1, 4), np.radians(-105.0))
+    n_skin, n_sky = len(skin_display), len(sky_display)
+    mem_target = np.concatenate([np.full(n_skin, skin_t), np.full(n_sky, sky_t)])
+    mem_wall = np.concatenate([np.full(n_skin, np.radians(15.0)),
+                               np.full(n_sky, np.radians(-125.0))])
 
     def run_stage(name, x0, lo, hi, ridge, neutral, model_of, res_kw):
         if progress:
@@ -515,7 +531,7 @@ def fit_film_model(ref: PooledTargets, source: PooledTargets | None = None,
             model = model_of(v)
             out = fwd(model.forward(di_cloud))
             data = _residuals(out, ref, opt, **res_kw)
-            skin = _skin_residual(model, skin_di, skin_hue_target, skin_c0, fwd, opt)
+            skin = _memory_residual(model, mem_di, mem_target, mem_wall, mem_c0, fwd, opt)
             reg = ridge_v * (v - neutral)
             return np.concatenate([data, skin, reg])
 
